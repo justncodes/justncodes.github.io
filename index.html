@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bear Trap Planner</title>
+  <style>
+    /* Basic CSS styling for the grid and UI elements */
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background-color: #f4f4f4;
+    }
+
+    #toolbar {
+      margin: 20px 0;
+    }
+
+    #toolbar-bottom {
+      margin: 20px 0;
+    }
+
+    button {
+      margin: 0 5px;
+      padding: 10px 15px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    #grid {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(40, 20px);
+      grid-template-rows: repeat(40, 20px);
+      /* gap: 1px; mind the gap */
+      background-color: #ddd;
+    }
+
+    .tile {
+      width: 20px;
+      height: 20px;
+      background-color: white;
+      box-sizing: border-box;
+      border: 1px solid #ccc;
+    }
+
+    .bear-trap {
+      background-color: red;
+    }
+
+    .hq {
+      background-color: steelblue;
+    }
+
+    .furnace {
+      background-color: yellowgreen;
+    }
+
+    .banner {
+      background-color: darkblue;
+    }
+
+    .non-buildable-area {
+      background-color: black;
+    }
+
+    .resource-node {
+      background-color: brown;
+    }
+
+    .covered {
+      background-color: lightblue;
+    }
+
+    .bear-trap, .hq, .furnace, .banner, .non-buildable-area, .resource-node {
+      border: none !important;
+    }
+
+    .object-border-top {
+      border-top: 2px solid black !important;
+    }
+
+    .object-border-right {
+      border-right: 2px solid black !important;
+    }
+
+    .object-border-bottom {
+      border-bottom: 2px solid black !important;
+    }
+
+    .object-border-left {
+      border-left: 2px solid black !important;
+    }
+  </style>
+</head>
+<body>
+  <h1>Bear Trap Planner</h1>
+  <div id="toolbar" style="margin: 5px 5px;">
+    <button id="add-bear-trap">Bear Trap</button>
+    <button id="add-hq">HQ</button>
+    <button id="add-furnace">Furnace</button>
+    <button id="add-banner">Banner</button>
+    <button id="add-resource-node">Resource Node</button>
+    <button id="add-non-buildable">Non-Buildable Area</button>
+    <p id="subtext" style="text-align:center; margin: 5px 5px; font-style: italic;">
+      Use these buttons to place objects on the map. Hold shift to place repeatedly.
+    </p>
+  </div>
+
+  <!-- Ghost element for dragging preview -->
+  <div id="drag-ghost" style="
+    display: none; 
+    position: absolute; 
+    pointer-events: none; 
+    opacity: 0.8;">
+  </div>
+
+  <div id="grid"></div>
+
+  <div id="toolbar-bottom">
+    <button id="undo">
+      <img src="icons/back.png"
+      alt="Back Icon"
+      style="width:16px; height:16px; margin-right: 5px;" />
+      Undo
+    </button>
+    <button id="clear-grid">
+      <img src="icons/clear.png"
+      alt="Clear Icon"
+      style="width:16px; height:16px; margin-right: 5px;" />
+      Clear Grid
+    </button>
+    <button id="save-layout">
+      <img src="icons/save.png"
+      alt="Save Icon"
+      style="width:16px; height:16px; margin-right: 5px;" />
+      Save
+    </button>
+    <button id="restore-layout">
+      <img src="icons/restore.png"
+      alt="Restore Icon"
+      style="width:16px; height:16px; margin-right: 5px;" />
+      Restore
+    </button>
+    <input type="file" id="load-layout" style="display: none;" />
+    <button id="set-name">Set Name</button>
+    <label>
+      <input type="checkbox" id="toggle-names" checked />
+      Show Names
+    </label>
+  </div>
+
+  <!-- Reference your script.js AFTER all HTML elements -->
+  <script src="script.js"></script>
+</body>
+</html>
