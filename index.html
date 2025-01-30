@@ -31,6 +31,12 @@
       cursor: pointer;
     }
 
+    button.active {
+      background-color: #666;
+      color: white;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
     #grid {
       position: relative;
       display: grid;
@@ -116,10 +122,31 @@
     #grid.delete-mode-active {
       cursor: not-allowed;
     }
+
+    .placement-preview {
+        background-color: rgba(200, 200, 200, 0.3);
+        box-sizing: border-box;
+        transition: all 0.1s ease;
+    }
+
+    .placement-preview.invalid {
+        background-color: rgba(255, 0, 0, 0.1);
+    }
+
+    .name-label {
+      display: none;
+    }
+
+    .show-names .name-label {
+      display: flex;
+    }
   </style>
 </head>
 <body>
   <h1>Bear Trap Planner</h1>
+  <!-- <p id="subtext" style="text-align:center; margin: 5px 5px; font-style: italic;">
+    Place objects on the map and plan your layout. Don't forget to save!
+  </p> -->
   <div id="toolbar" style="margin: 5px 5px;">
     <button id="add-bear-trap">Bear Trap</button>
     <button id="add-hq">HQ</button>
@@ -127,16 +154,13 @@
     <button id="add-banner">Banner</button>
     <button id="add-resource-node">Resource Node</button>
     <button id="add-non-buildable">Non-Buildable Area</button>
-    <p id="subtext" style="text-align:center; margin: 5px 5px; font-style: italic;">
-      Use these buttons to place objects on the map. Hold shift to place repeatedly.
-    </p>
   </div>
 
   <!-- Ghost element for dragging preview -->
   <div id="drag-ghost" style="
-    display: none; 
-    position: absolute; 
-    pointer-events: none; 
+    display: none;
+    position: absolute;
+    pointer-events: none;
     opacity: 0.8;">
   </div>
 

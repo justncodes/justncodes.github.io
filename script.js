@@ -27,45 +27,164 @@ let showNames = true;
 // Toggle when pressing Delete
 let isDeleteMode = false;
 
-// Dynamic highlighting
+// Dynamic highlighting variables
 let deleteHighlightElement = null;
 let lastHoveredObject = null;
 
-// ---------- Toolbar Button Listeners ----------
-document.getElementById('undo').addEventListener('click', undoLastPlacement);
-document.getElementById('add-bear-trap').addEventListener('click', () => addObject('bear-trap', 3));
-document.getElementById('add-hq').addEventListener('click', () => addObject('hq', 3));
-document.getElementById('add-furnace').addEventListener('click', () => addObject('furnace', 2));
-document.getElementById('add-banner').addEventListener('click', () => addObject('banner', 1));
-document.getElementById('add-resource-node').addEventListener('click', () => addObject('resource-node', 2));
-document.getElementById('add-non-buildable').addEventListener('click', () => addObject('non-buildable-area', 1));
-document.getElementById('clear-grid').addEventListener('click', clearGrid);
-document.getElementById('save-layout').addEventListener('click', saveLayout);
+let activeMode = null; // 'place', 'delete', 'name'
+let currentPlacementType = null; // The specific object type being placed
 
-// "Restore Layout" button => triggers hidden file input
-document.getElementById('restore-layout').addEventListener('click', () => {
-  document.getElementById('load-layout').click();
+// Placement preview variables
+let placementPreview = null;
+let isValidPlacement = false;
+
+const style = document.createElement('style');
+style.textContent = `
+.placement-preview {
+    position: absolute;
+    pointer-events: none;
+    opacity: 0.7;
+    z-index: 2;
+    border: 2px solid #00ff00;
+}
+.placement-preview.invalid {
+    border-color: #ff0000;
+    opacity: 0.5;
+}
+`;
+document.head.appendChild(style);
+
+// ---------- Event Handlers ----------
+document.querySelectorAll('#toolbar button, #toolbar-bottom button').forEach(button => {
+  button.addEventListener('click', function() {
+    const isSameButton = this.classList.contains('active');
+    
+    // Deactivate all modes first
+    deactivateAllModes();
+    
+    // If clicking the same button again, don't reactivate
+    if (!isSameButton) {
+      switch(this.id) {
+        case 'delete-mode':
+          activateDeleteMode();
+          break;
+        case 'set-name':
+          activateNamingMode();
+          break;
+        case 'undo':
+          undoLastPlacement();
+          break;
+        case 'clear-grid':
+          clearGrid();
+          break;
+        case 'save-layout':
+          saveLayout();
+          break;
+        case 'restore-layout':
+          document.getElementById('load-layout').click();
+          break;
+        default:
+          if (this.id.startsWith('add-')) {
+            activatePlacementMode(this.id.replace('add-', ''));
+          }
+      }
+    }
+  });
 });
+
+// Special case for load layout
 document.getElementById('load-layout').addEventListener('change', loadLayout);
 
-// Set up the "Show Names" checkbox
-document.getElementById('toggle-names').addEventListener('change', (e) => {
-  showNames = e.target.checked;
-  refreshGrid();
+// Listeners for placement preview
+grid.addEventListener('mousemove', handlePlacementPreview);
+grid.addEventListener('mouseleave', () => {
+    if (placementPreview) placementPreview.style.display = 'none';
 });
 
-// "Set Name" button => next click on a tile sets a name
-document.getElementById('set-name').addEventListener('click', () => {
+function handlePlacementPreview(e) {
+  if (!currentObject || activeMode !== 'place') return;
+  
+  const tile = getTileFromMouseEvent(e);
+  if (!tile) return;
+
+  const size = currentObject.size * 20;
+  const col = tile.col;
+  const row = tile.row;
+  
+  if (!placementPreview) {
+      placementPreview = document.createElement('div');
+      placementPreview.className = 'placement-preview';
+      grid.appendChild(placementPreview);
+  }
+
+  // Check if placement is valid
+  isValidPlacement = canPlaceObject(row, col, currentObject.size);
+  placementPreview.classList.toggle('invalid', !isValidPlacement);
+  
+  // Position preview
+  placementPreview.style.display = 'block';
+  placementPreview.style.width = `${size}px`;
+  placementPreview.style.height = `${size}px`;
+  placementPreview.style.left = `${col * 20}px`;
+  placementPreview.style.top = `${row * 20}px`;
+  
+  // Adjust for grid boundaries
+  const maxPos = gridSize - currentObject.size;
+  if (row > maxPos) placementPreview.style.top = `${maxPos * 20}px`;
+  if (col > maxPos) placementPreview.style.left = `${maxPos * 20}px`;
+}
+
+function deactivateAllModes() {
+  // Remove visual active states
+  document.querySelectorAll('.active').forEach(btn => btn.classList.remove('active'));
+  
+  // Reset all mode variables
+  activeMode = null;
+  currentPlacementType = null;
+  currentObject = null;
+  isDeleteMode = false;
+  isNamingMode = false;
+
+  grid.classList.remove('delete-mode-active');
+
+  if (placementPreview) {
+    placementPreview.style.display = 'none';
+  }
+}
+
+function activatePlacementMode(type) {
+  const sizeMap = {
+    'bear-trap': 3,
+    'hq': 3,
+    'furnace': 2,
+    'banner': 1,
+    'resource-node': 2,
+    'non-buildable': 1
+  };
+
+  activeMode = 'place';
+  currentPlacementType = type;
+  currentObject = {
+    className: type,
+    size: sizeMap[type]
+  };
+  
+  // Add visual feedback
+  document.getElementById(`add-${type}`).classList.add('active');
+}
+
+function activateDeleteMode() {
+  activeMode = 'delete';
+  isDeleteMode = true;
+  grid.classList.add('delete-mode-active');
+  document.getElementById('delete-mode').classList.add('active');
+}
+
+function activateNamingMode() {
+  activeMode = 'name';
   isNamingMode = true;
-});
-
-// "Delete mode" when the delete button is pressed
-document.getElementById('delete-mode').addEventListener('click', () => {
-  isDeleteMode = !isDeleteMode;
-  grid.classList.toggle('delete-mode-active', isDeleteMode);
-  document.getElementById('delete-mode').classList.toggle('active', isDeleteMode);
-  if (!isDeleteMode) clearDeleteHighlight();
-});
+  document.getElementById('set-name').classList.add('active');
+}
 
 // Create the highlight element
 function createDeleteHighlight() {
@@ -114,6 +233,9 @@ function clearDeleteHighlight() {
   }
 }
 
+// Initialize the highlight element on load
+createDeleteHighlight();
+
 // ---------- Initialize the grid ----------
 function createGrid() {
   for (let i = 0; i < gridSize * gridSize; i++) {
@@ -134,6 +256,10 @@ function createGrid() {
 // Re-draw all objects in proper order
 function refreshGrid() {
   clearGridVisualOnly();
+  
+  // Toggle grid class based on showNames
+  grid.classList.toggle('show-names', showNames);
+  
   placedObjects.forEach(obj => {
     placeObjectOnGrid(obj.row, obj.col, obj.className, obj.size, obj);
   });
@@ -163,10 +289,6 @@ function handleTileMouseDown(e) {
         refreshGrid();
       }
     }
-    isDeleteMode = false;
-    grid.classList.remove('delete-mode-active');
-    document.getElementById('delete-mode').classList.remove('active');
-    clearDeleteHighlight();
     return;
   }
 
@@ -207,8 +329,18 @@ function handleTileMouseDown(e) {
 
 // For placing a brand-new object by clicking on a tile
 function handleTileClick(event) {
-  if (!currentObject) return;
+  if (!currentObject || !placementPreview) return;
 
+  // Get position from preview element
+  const previewCol = parseInt(placementPreview.style.left) / 20;
+  const previewRow = parseInt(placementPreview.style.top) / 20;
+
+  if (!isValidPlacement) {
+    alert('Invalid placement!');
+    return;
+  }
+
+  // HQ and Bear Trap validation checks
   if (currentObject.className === 'hq' && hqCount >= 1) {
     alert('Only 1 HQ is allowed on the grid.');
     return;
@@ -218,18 +350,14 @@ function handleTileClick(event) {
     return;
   }
 
-  const tileIndex = parseInt(event.target.dataset.index);
-  const row = Math.floor(tileIndex / gridSize);
-  const col = tileIndex % gridSize;
-
-  // Attempt to place it
-  if (canPlaceObject(row, col, currentObject.size)) {
-    placeObjectOnGrid(row, col, currentObject.className, currentObject.size, currentObject);
+  // Use preview position for placement
+  if (canPlaceObject(previewRow, previewCol, currentObject.size)) {
+    placeObjectOnGrid(previewRow, previewCol, currentObject.className, currentObject.size, currentObject);
 
     // Add to placedObjects
     placedObjects.push({
-      row,
-      col,
+      row: previewRow,
+      col: previewCol,
       size: currentObject.size,
       className: currentObject.className
     });
@@ -237,12 +365,9 @@ function handleTileClick(event) {
     // Update counters
     if (currentObject.className === 'hq') hqCount++;
     if (currentObject.className === 'bear-trap') bearTrapCount++;
-
-    // **** Only clear currentObject if Shift is NOT held ****
-    if (!event.shiftKey) {
-      currentObject = null;
-    }
-
+    
+    // Force grid refresh
+    refreshGrid();
   } else {
     alert('Invalid placement!');
   }
@@ -345,8 +470,6 @@ function handleMouseUp(e) {
 
 // ---------- Naming Logic ----------
 function handleNameSetting(e) {
-  isNamingMode = false; // consume naming mode
-
   const tileIndex = parseInt(e.target.dataset.index);
   const row = Math.floor(tileIndex / gridSize);
   const col = tileIndex % gridSize;
@@ -554,8 +677,8 @@ function placeObjectOnGrid(row, col, className, size, obj) {
     highlightTerritory(row, col, 3);
   }
 
-  // If showNames && the object has a name => create a label
-  if (obj && showNames && obj.name) {
+  // Create label and control visibility via CSS
+  if (obj && obj.name) {
     const labelDiv = document.createElement('div');
     labelDiv.classList.add('name-label');
     labelDiv.textContent = obj.name;
@@ -568,7 +691,6 @@ function placeObjectOnGrid(row, col, className, size, obj) {
     labelDiv.style.height = (size * 20) + 'px';
 
     // center the text
-    labelDiv.style.display = 'flex';
     labelDiv.style.alignItems = 'center';
     labelDiv.style.justifyContent = 'center';
     labelDiv.style.pointerEvents = 'none'; // so clicks pass through
@@ -696,8 +818,11 @@ function createDeleteHighlight() {
   grid.appendChild(deleteHighlightElement);
 }
 
-// Initialize the highlight element on load
-createDeleteHighlight();
+// Toggle names case
+document.getElementById('toggle-names').addEventListener('change', (e) => {
+  showNames = e.target.checked;
+  refreshGrid();
+});
 
 // ---------- Initialize on page load ----------
 createGrid();
