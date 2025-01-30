@@ -1,4 +1,5 @@
 // script.js
+// Bear Trap Planner v0.1 alpha
 
 // Get references to DOM elements
 const grid = document.getElementById('grid');
@@ -23,6 +24,30 @@ const dragGhost = document.getElementById('drag-ghost'); // Hidden ghost div
 let isNamingMode = false;
 let showNames = true;
 
+// Toggle when pressing Delete
+let isDeleteMode = false;
+
+// Dynamic highlighting
+let deleteHighlightElement = null;
+let lastHoveredObject = null;
+
+// ---------- Toolbar Button Listeners ----------
+document.getElementById('undo').addEventListener('click', undoLastPlacement);
+document.getElementById('add-bear-trap').addEventListener('click', () => addObject('bear-trap', 3));
+document.getElementById('add-hq').addEventListener('click', () => addObject('hq', 3));
+document.getElementById('add-furnace').addEventListener('click', () => addObject('furnace', 2));
+document.getElementById('add-banner').addEventListener('click', () => addObject('banner', 1));
+document.getElementById('add-resource-node').addEventListener('click', () => addObject('resource-node', 2));
+document.getElementById('add-non-buildable').addEventListener('click', () => addObject('non-buildable-area', 1));
+document.getElementById('clear-grid').addEventListener('click', clearGrid);
+document.getElementById('save-layout').addEventListener('click', saveLayout);
+
+// "Restore Layout" button => triggers hidden file input
+document.getElementById('restore-layout').addEventListener('click', () => {
+  document.getElementById('load-layout').click();
+});
+document.getElementById('load-layout').addEventListener('change', loadLayout);
+
 // Set up the "Show Names" checkbox
 document.getElementById('toggle-names').addEventListener('change', (e) => {
   showNames = e.target.checked;
@@ -33,6 +58,61 @@ document.getElementById('toggle-names').addEventListener('change', (e) => {
 document.getElementById('set-name').addEventListener('click', () => {
   isNamingMode = true;
 });
+
+// "Delete mode" when the delete button is pressed
+document.getElementById('delete-mode').addEventListener('click', () => {
+  isDeleteMode = !isDeleteMode;
+  grid.classList.toggle('delete-mode-active', isDeleteMode);
+  document.getElementById('delete-mode').classList.toggle('active', isDeleteMode);
+  if (!isDeleteMode) clearDeleteHighlight();
+});
+
+// Create the highlight element
+function createDeleteHighlight() {
+  deleteHighlightElement = document.createElement('div');
+  deleteHighlightElement.classList.add('delete-highlight');
+  deleteHighlightElement.style.cssText = 'width: 0; height: 0; border: none;';
+  grid.appendChild(deleteHighlightElement);
+}
+
+// Update the grid mousemove handler
+grid.addEventListener('mousemove', (e) => {
+  if (!isDeleteMode) return;
+
+  const tile = getTileFromMouseEvent(e);
+  if (!tile) {
+    clearDeleteHighlight();
+    return;
+  }
+
+  const obj = findObjectAt(tile.row, tile.col);
+  if (obj && obj !== lastHoveredObject) {
+    updateDeleteHighlight(obj);
+    lastHoveredObject = obj;
+  } else if (!obj) {
+    clearDeleteHighlight();
+    lastHoveredObject = null;
+  }
+});
+
+function updateDeleteHighlight(obj) {
+  if (!deleteHighlightElement) createDeleteHighlight();
+  
+  const size = obj.size * 20;
+  deleteHighlightElement.style.cssText = `
+    width: ${size}px;
+    height: ${size}px;
+    left: ${obj.col * 20}px;
+    top: ${obj.row * 20}px;
+    border: 2px solid red;
+  `;
+}
+
+function clearDeleteHighlight() {
+  if (deleteHighlightElement) {
+    deleteHighlightElement.style.cssText = 'width: 0; height: 0; border: none;';
+  }
+}
 
 // ---------- Initialize the grid ----------
 function createGrid() {
@@ -51,18 +131,45 @@ function createGrid() {
   document.addEventListener('mouseup', handleMouseUp);
 }
 
-// Refresh the entire grid visually, re-placing all objects
+// Re-draw all objects in proper order
 function refreshGrid() {
   clearGridVisualOnly();
-  for (const obj of placedObjects) {
+  placedObjects.forEach(obj => {
     placeObjectOnGrid(obj.row, obj.col, obj.className, obj.size, obj);
-  }
+  });
 }
 
 // ---------- Mouse event handlers ----------
 
 // If we have a new object selected, place it. Otherwise, maybe drag or name an existing object.
 function handleTileMouseDown(e) {
+  if (isDeleteMode) {
+    const tile = getTileFromMouseEvent(e);
+    if (!tile) return;
+
+    const obj = findObjectAt(tile.row, tile.col);
+    if (obj) {
+      // Remove object from placedObjects
+      const index = placedObjects.indexOf(obj);
+      if (index > -1) {
+        placedObjects.splice(index, 1);
+        
+        // Update counters
+        if (obj.className === 'hq') hqCount--;
+        if (obj.className === 'bear-trap') bearTrapCount--;
+        
+        // Refresh grid
+        clearGridVisualOnly();
+        refreshGrid();
+      }
+    }
+    isDeleteMode = false;
+    grid.classList.remove('delete-mode-active');
+    document.getElementById('delete-mode').classList.remove('active');
+    clearDeleteHighlight();
+    return;
+  }
+
   if (currentObject) {
     // Place new object
     handleTileClick(e);
@@ -266,13 +373,15 @@ function handleNameSetting(e) {
 }
 
 // ---------- Helper functions ----------
-
 function findObjectAt(row, col) {
+  // Search in reverse to find top-most object
   for (let i = placedObjects.length - 1; i >= 0; i--) {
     const obj = placedObjects[i];
     if (
-      row >= obj.row && row < obj.row + obj.size &&
-      col >= obj.col && col < obj.col + obj.size
+      row >= obj.row && 
+      row < obj.row + obj.size &&
+      col >= obj.col && 
+      col < obj.col + obj.size
     ) {
       return obj;
     }
@@ -580,22 +689,15 @@ function addObject(className, size) {
   currentObject = { className, size };
 }
 
-// ---------- Toolbar Button Listeners ----------
-document.getElementById('undo').addEventListener('click', undoLastPlacement);
-document.getElementById('add-bear-trap').addEventListener('click', () => addObject('bear-trap', 3));
-document.getElementById('add-hq').addEventListener('click', () => addObject('hq', 3));
-document.getElementById('add-furnace').addEventListener('click', () => addObject('furnace', 2));
-document.getElementById('add-banner').addEventListener('click', () => addObject('banner', 1));
-document.getElementById('add-resource-node').addEventListener('click', () => addObject('resource-node', 2));
-document.getElementById('add-non-buildable').addEventListener('click', () => addObject('non-buildable-area', 1));
-document.getElementById('clear-grid').addEventListener('click', clearGrid);
-document.getElementById('save-layout').addEventListener('click', saveLayout);
+// Create the highlight element
+function createDeleteHighlight() {
+  deleteHighlightElement = document.createElement('div');
+  deleteHighlightElement.classList.add('delete-highlight');
+  grid.appendChild(deleteHighlightElement);
+}
 
-// "Restore Layout" button => triggers hidden file input
-document.getElementById('restore-layout').addEventListener('click', () => {
-  document.getElementById('load-layout').click();
-});
-document.getElementById('load-layout').addEventListener('change', loadLayout);
+// Initialize the highlight element on load
+createDeleteHighlight();
 
 // ---------- Initialize on page load ----------
 createGrid();
