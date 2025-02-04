@@ -36,17 +36,75 @@
       color: white;
       box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
     }
-    
+
+    #grid-wrapper {
+      transition: transform 0.5s ease;
+      transform: none;
+    }
+  
     #grid {
+      width: 800px; /* 40 * 20 */
+      height: 800px;
       position: relative;
       display: grid;
       grid-template-columns: repeat(40, 20px);
       grid-template-rows: repeat(40, 20px);
       background-color: #ddd;
       overflow: visible;
-      contain: paint;
+      /* contain: paint; */
+      transition: transform 0.5s ease; /* so toggling is smooth */
+      transform-origin: center;
+      transform: none;
     }
 
+    #grid-container {
+      position: relative;
+      width: 800px;   /* same as grid width */
+      height: 800px;  /* same as grid height */
+    }
+
+    #grid.isometric {
+      transform: rotate(45deg) skew(-15deg, -15deg);
+      margin: 25px;
+    }
+
+    #grid-wrapper.isometric {
+      transform: rotate(45deg) skew(-15deg, -15deg);
+      transform-origin: center;
+      margin: 25px;
+    }
+
+    #grid-wrapper.isometric .name-label {
+      transform: translate(-50%, -50%) skew(15deg, 15deg) rotate(-45deg); /* Counteract grid transform */
+    }
+    
+    #labels-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10; /* Above the grid */
+    }
+
+    .name-label {
+      position: absolute;
+      transform: translate(-50%, -50%); /* Center the label */
+      pointer-events: none;
+      font-size: 10px;
+      display: none;
+      transition: none;
+    }
+
+    .show-names .name-label {
+      display: flex;
+    }
+    
+    #labels-overlay.show-names .name-label {
+      display: block;
+    }
+  
     .tile {
       width: 20px;
       height: 20px;
@@ -133,12 +191,17 @@
         background-color: rgba(255, 0, 0, 0.1);
     }
 
-    .name-label {
-      display: none;
+    #drag-ghost {
+      position: absolute;
+      pointer-events: none;
+      opacity: 0.8;
+      transition: transform 0.5s ease;
+      z-index: 100;
     }
-
-    .show-names .name-label {
-      display: flex;
+    
+    #drag-ghost.isometric {
+      transform-origin: center center;
+      transform: translate(-50%, -50%) rotate(45deg) skew(-15deg, -15deg);
     }
   </style>
 </head>
@@ -153,7 +216,7 @@
     <button id="add-furnace">Furnace</button>
     <button id="add-banner">Banner</button>
     <button id="add-resource-node">Resource Node</button>
-    <button id="add-non-buildable">Non-Buildable Area</button>
+    <button id="add-non-buildable-area">Non-Buildable Area</button>
   </div>
 
   <!-- Ghost element for dragging preview -->
@@ -164,7 +227,12 @@
     opacity: 0.8;">
   </div>
 
-  <div id="grid"></div>
+  <div id="grid-container" style="position: relative; width: 800px; height: 800px;">
+    <div id="grid-wrapper">
+      <div id="grid"></div>
+    </div>
+    <div id="labels-overlay"></div>
+  </div>
 
   <div id="toolbar-bottom">
     <button id="delete-mode">
@@ -202,6 +270,10 @@
     <label>
       <input type="checkbox" id="toggle-names" checked />
       Show Names
+    </label>
+    <label style="margin-left: 15px;">
+      <input type="checkbox" id="toggle-isometric" />
+      Isometric View
     </label>
   </div>
 

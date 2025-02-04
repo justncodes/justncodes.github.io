@@ -159,7 +159,7 @@ function activatePlacementMode(type) {
     'furnace': 2,
     'banner': 1,
     'resource-node': 2,
-    'non-buildable': 1
+    'non-buildable-area': 1
   };
 
   activeMode = 'place';
@@ -263,6 +263,8 @@ function refreshGrid() {
   placedObjects.forEach(obj => {
     placeObjectOnGrid(obj.row, obj.col, obj.className, obj.size, obj);
   });
+
+  refreshLabelPositions();
 }
 
 // ---------- Mouse event handlers ----------
@@ -352,15 +354,17 @@ function handleTileClick(event) {
 
   // Use preview position for placement
   if (canPlaceObject(previewRow, previewCol, currentObject.size)) {
-    placeObjectOnGrid(previewRow, previewCol, currentObject.className, currentObject.size, currentObject);
-
-    // Add to placedObjects
-    placedObjects.push({
+    const newObj = {
+      id: crypto.randomUUID(), // Add unique ID
       row: previewRow,
       col: previewCol,
       size: currentObject.size,
-      className: currentObject.className
-    });
+      className: currentObject.className,
+      name: '' // Will be populated later
+    };
+
+    // Add to placedObjects
+    placedObjects.push(newObj);
 
     // Update counters
     if (currentObject.className === 'hq') hqCount++;
@@ -377,43 +381,33 @@ function handleTileClick(event) {
 function handleMouseMove(e) {
   if (!isDragging || !draggedObject) return;
 
-  // 1) Find which tile the mouse is over
+  // Determine which tile the mouse is over.
   const tileUnderMouse = getTileFromMouseEvent(e);
-
-  // 2) Clear real-time coverage from last frame
+  // Clear any previous temporary highlights.
   clearRealTimeCoverage();
 
-  // 3) If inside the grid, compute top-left of the object
   if (tileUnderMouse) {
     const newRow = tileUnderMouse.row - dragOffset.row;
     const newCol = tileUnderMouse.col - dragOffset.col;
 
-    // If in range, highlight territory or border
+    // Update coverage/border highlights if the position is valid.
     if (
-      newRow >= 0 && 
-      newCol >= 0 && 
+      newRow >= 0 &&
+      newCol >= 0 &&
       newRow + draggedObject.size <= gridSize &&
       newCol + draggedObject.size <= gridSize
     ) {
-      // HQ or banner coverage
       if (draggedObject.className === 'hq') {
         highlightTerritory(newRow + 1, newCol + 1, 7);
       } else if (draggedObject.className === 'banner') {
         highlightTerritory(newRow, newCol, 3);
       }
-      // Border preview
       highlightObjectBorder(newRow, newCol, draggedObject.size);
     }
-
-    // Position ghost in alignment with the grid
-    const rect = grid.getBoundingClientRect();
-    dragGhost.style.left = (rect.left + newCol * 20) + 'px';
-    dragGhost.style.top  = (rect.top  + newRow * 20) + 'px';
-  } else {
-    // If outside the grid, either move ghost to cursor or hide, etc.
-    dragGhost.style.left = e.pageX + 'px';
-    dragGhost.style.top  = e.pageY + 'px';
   }
+  // Always place the ghost under the actual mouse pointer (screen coordinates).
+  dragGhost.style.left = e.pageX + 'px';
+  dragGhost.style.top  = e.pageY + 'px';
 }
 
 // Mouse up => finalize or revert drag
@@ -554,15 +548,59 @@ function showDragGhost(obj) {
 }
 
 function getTileFromMouseEvent(e) {
-  const rect = grid.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-  
-  if (x < 0 || y < 0) return null;
-  const col = Math.floor(x / 20);
-  const row = Math.floor(y / 20);
-  
-  if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) return null;
+  const gridWrapper = document.getElementById('grid-wrapper');
+  const gridElement = document.getElementById('grid');
+  const wrapperRect = gridWrapper.getBoundingClientRect();
+
+  // Because the grid is centered with fixed dimensions, compute its offset manually.
+  const gridWidth = gridElement.offsetWidth;   // e.g., 800px
+  const gridHeight = gridElement.offsetHeight; // e.g., 800px
+  const gridOffsetX = (wrapperRect.width - gridWidth) / 2;
+  const gridOffsetY = (wrapperRect.height - gridHeight) / 2;
+
+  // Get mouse coordinates relative to the grid wrapper.
+  let mouseX = e.clientX - wrapperRect.left;
+  let mouseY = e.clientY - wrapperRect.top;
+
+  if (gridWrapper.classList.contains('isometric')) {
+    const style = window.getComputedStyle(gridWrapper);
+    const transform = style.transform;
+    if (transform && transform !== 'none') {
+      try {
+        // Invert the gridWrapper's transform.
+        const matrix = new DOMMatrix(transform);
+        const invertedMatrix = matrix.inverse();
+
+        // Because the transform-origin is center, subtract the center.
+        const centerX = wrapperRect.width / 2;
+        const centerY = wrapperRect.height / 2;
+        mouseX -= centerX;
+        mouseY -= centerY;
+
+        const point = new DOMPoint(mouseX, mouseY);
+        const transformedPoint = point.matrixTransform(invertedMatrix);
+
+        // Re-add the center offset.
+        mouseX = transformedPoint.x + centerX;
+        mouseY = transformedPoint.y + centerY;
+      } catch (error) {
+        console.error('Error inverting transform:', error);
+      }
+    }
+  }
+
+  // Adjust the mouse coordinates by the manually computed grid offset.
+  mouseX -= gridOffsetX;
+  mouseY -= gridOffsetY;
+
+  const tileSize = 20;
+  const col = Math.floor(mouseX / tileSize);
+  const row = Math.floor(mouseY / tileSize);
+
+  if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) {
+    return null;
+  }
+
   return { row, col };
 }
 
@@ -630,6 +668,85 @@ function canPlaceObject(row, col, size) {
   return true;
 }
 
+// Takes a point in the grid’s untransformed coordinate space and returns the point’s position after the grid’s transform is applied
+function getTransformedPoint(x, y) {
+  // We'll use the actual grid element as our reference.
+  const grid = document.getElementById('grid');
+  // Get the grid’s absolute position and dimensions.
+  const gridRect = grid.getBoundingClientRect();
+  const originalWidth = grid.offsetWidth;
+  const originalHeight = grid.offsetHeight;
+  
+  // Get the transform from the grid wrapper.
+  const gridWrapper = document.getElementById('grid-wrapper');
+  const style = window.getComputedStyle(gridWrapper);
+  const transform = style.transform;
+  
+  if (!transform || transform === 'none') {
+    // No transform? Return the point relative to the grid’s top-left.
+    return { x: gridRect.left + x, y: gridRect.top + y };
+  }
+  
+  try {
+    // Create a DOMMatrix from the transform.
+    const matrix = new DOMMatrix(transform);
+    // Use the grid element’s untransformed dimensions for the origin.
+    const centerX = originalWidth / 2;
+    const centerY = originalHeight / 2;
+    // Our input (x,y) is relative to the grid’s top‑left.
+    // Convert it into coordinates relative to the grid’s center.
+    const point = new DOMPoint(x - centerX, y - centerY);
+    // Apply the transform.
+    const transformedPoint = point.matrixTransform(matrix);
+    // Convert back to absolute coordinates by adding the center and grid’s screen position.
+    return {
+      x: transformedPoint.x + centerX + gridRect.left,
+      y: transformedPoint.y + centerY + gridRect.top
+    };
+  } catch (error) {
+    console.error("Error applying transform:", error);
+    return { x: gridRect.left + x, y: gridRect.top + y };
+  }
+}
+
+
+
+function refreshLabelPositions() {
+  const labelsOverlay = document.getElementById('labels-overlay');
+  const labels = labelsOverlay.querySelectorAll('.name-label');
+  const gridWrapper = document.getElementById('grid-wrapper');
+  const gridContainer = document.getElementById('grid-container');
+  
+  labels.forEach(label => {
+    const objId = label.dataset.objectId;
+    const obj = placedObjects.find(o => o.id === objId);
+    
+    if (obj) {
+      // Calculate base position in grid coordinates
+      const baseX = obj.col * 20 + (obj.size * 20)/2;
+      const baseY = obj.row * 20 + (obj.size * 20)/2;
+
+      // Create measurement element
+      const measurer = document.createElement('div');
+      measurer.style.position = 'absolute';
+      measurer.style.left = `${baseX}px`;
+      measurer.style.top = `${baseY}px`;
+      measurer.style.width = '1px';
+      measurer.style.height = '1px';
+      
+      // Add to grid wrapper for accurate positioning
+      gridWrapper.appendChild(measurer);
+      const rect = measurer.getBoundingClientRect();
+      const containerRect = gridContainer.getBoundingClientRect();
+      gridWrapper.removeChild(measurer);
+
+      // Convert to container-relative coordinates
+      label.style.left = `${rect.left - containerRect.left}px`;
+      label.style.top = `${rect.top - containerRect.top}px`;
+    }
+  });
+}
+
 // ---------- Undo, Clear, Save, Load ----------
 function undoLastPlacement() {
   if (placedObjects.length === 0) return;
@@ -677,26 +794,28 @@ function placeObjectOnGrid(row, col, className, size, obj) {
     highlightTerritory(row, col, 3);
   }
 
-  // Create label and control visibility via CSS
+  // Create label and control visibility
   if (obj && obj.name) {
+    // Remove existing label
+    const existingLabel = document.querySelector(`[data-object-id="${obj.id}"]`);
+    if (existingLabel) existingLabel.remove();
+
+    // Create new label
     const labelDiv = document.createElement('div');
     labelDiv.classList.add('name-label');
     labelDiv.textContent = obj.name;
+    labelDiv.dataset.objectId = obj.id;
 
-    // position/size for the entire bounding box
-    labelDiv.style.position = 'absolute';
-    labelDiv.style.left = (col * 20) + 'px';
-    labelDiv.style.top = (row * 20) + 'px';
-    labelDiv.style.width = (size * 20) + 'px';
-    labelDiv.style.height = (size * 20) + 'px';
+    // Set base position (will be updated in refresh)
+    labelDiv.style.left = `${col * 20 + (size * 20)/2}px`;
+    labelDiv.style.top = `${row * 20 + (size * 20)/2}px`;
 
-    // center the text
-    labelDiv.style.alignItems = 'center';
-    labelDiv.style.justifyContent = 'center';
-    labelDiv.style.pointerEvents = 'none'; // so clicks pass through
-    labelDiv.style.fontSize = '10px';
-
-    grid.appendChild(labelDiv);
+    document.getElementById('labels-overlay').appendChild(labelDiv);
+    
+    // Force position update
+    requestAnimationFrame(() => {
+      refreshLabelPositions();
+    });
   }
 }
 
@@ -713,8 +832,10 @@ function clearGrid() {
   placedObjects = [];
 
   // Remove all name labels
-  const nameLabels = document.querySelectorAll('.name-label');
-  nameLabels.forEach(lbl => lbl.remove());
+  const labelsOverlay = document.getElementById('labels-overlay');
+  while (labelsOverlay.firstChild) {
+    labelsOverlay.removeChild(labelsOverlay.firstChild);
+  }
 }
 
 function clearGridVisualOnly() {
@@ -726,9 +847,11 @@ function clearGridVisualOnly() {
     tile.textContent = '';
   });
 
-  // Remove all "name-label" divs
-  const nameLabels = document.querySelectorAll('.name-label');
-  nameLabels.forEach(lbl => lbl.remove());
+  // Remove all "name-label" divs from the overlay
+  const labelsOverlay = document.getElementById('labels-overlay');
+  while (labelsOverlay.firstChild) {
+    labelsOverlay.removeChild(labelsOverlay.firstChild);
+  }
 }
 
 function saveLayout() {
@@ -750,7 +873,10 @@ function loadLayout(event) {
   reader.onload = function(e) {
     try {
       const loadedData = JSON.parse(e.target.result);
-      placedObjects = loadedData;
+      placedObjects = loadedData.map(obj => ({
+        ...obj,
+        id: obj.id || crypto.randomUUID() // Add ID if missing
+      }));
       recalculateCounters();
       clearGridVisualOnly();
       for (const obj of placedObjects) {
@@ -821,8 +947,43 @@ function createDeleteHighlight() {
 // Toggle names case
 document.getElementById('toggle-names').addEventListener('change', (e) => {
   showNames = e.target.checked;
+  const labelsOverlay = document.getElementById('labels-overlay');
+  if (showNames) {
+    labelsOverlay.classList.add('show-names');
+  } else {
+    labelsOverlay.classList.remove('show-names');
+  }
   refreshGrid();
 });
 
+document.getElementById('labels-overlay').classList.add('show-names');
+
 // ---------- Initialize on page load ----------
 createGrid();
+
+// Get the isometric checkbox and grid wrapper
+const isometricCheckbox = document.getElementById('toggle-isometric');
+const gridWrapper = document.getElementById('grid-wrapper');
+
+function animateLabelPositions(duration) {
+  const start = performance.now();
+  function tick(now) {
+    refreshLabelPositions();
+    if (now - start < duration) {
+      requestAnimationFrame(tick);
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+isometricCheckbox.addEventListener('change', (e) => {
+  const isIso = e.target.checked;
+  // Toggle the grid’s isometric class:
+  gridWrapper.classList.toggle('isometric', isIso);
+
+  // ALSO toggle the ghost’s isometric class:
+  dragGhost.classList.toggle('isometric', isIso);
+
+  // Animate label positions
+  animateLabelPositions(500);
+});
