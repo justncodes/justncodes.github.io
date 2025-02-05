@@ -277,7 +277,7 @@ function handleMouseUp(e) {
 
   // Check if valid
   if (!canPlaceObject(row, col, size)) {
-    // revert to original
+    // Invalid, revert to original
     placeObjectOnGrid(
       dragOriginalPos.row, 
       dragOriginalPos.col, 
@@ -288,6 +288,15 @@ function handleMouseUp(e) {
     draggedObject.row = dragOriginalPos.row;
     draggedObject.col = dragOriginalPos.col;
     draggedObject = null;
+
+    // Clear any real-time border and coverage highlights
+    clearRealTimeCoverage();
+
+    // Hide the placement preview element if it exists
+    if (placementPreview) {
+      placementPreview.style.display = 'none';
+    }
+    
     return;
   }
 
