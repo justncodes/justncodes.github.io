@@ -144,6 +144,16 @@ function handleTileMouseDown(e) {
 function handleTileClick(e) {
   if (!currentObject || activeMode !== 'place') return;
 
+  // Check if we already have the allowed number of each object
+  if (currentObject.className === 'hq' && hqCount >= 1) {
+    alert('Only 1 HQ allowed!');
+    return;
+  }
+  if (currentObject.className === 'bear-trap' && bearTrapCount >= 2) {
+    alert('Only 2 Bear Traps allowed!');
+    return;
+  }
+
   const tile = getTileFromMouseEvent(e);
   if (!tile) return;
 
@@ -165,7 +175,7 @@ function handleTileClick(e) {
 
   // Validate
   if (!canPlaceObject(row, col, size)) {
-    alert('Invalid placement!');
+    // Invalid placement - return!
     return;
   }
 
@@ -267,7 +277,6 @@ function handleMouseUp(e) {
 
   // Check if valid
   if (!canPlaceObject(row, col, size)) {
-    alert('Invalid placement or overlap!');
     // revert to original
     placeObjectOnGrid(
       dragOriginalPos.row, 
@@ -743,15 +752,6 @@ function activateNamingMode() {
   document.getElementById('set-name').classList.add('active');
 }
 
-// Undo last placed object
-function undoLastPlacement() {
-  if (placedObjects.length === 0) return;
-  placedObjects.pop();
-  recalcCounters();
-  clearGridVisualOnly();
-  placedObjects.forEach(o => placeObjectOnGrid(o.row, o.col, o.className, o.size, o));
-}
-
 function recalcCounters() {
   hqCount = 0;
   bearTrapCount = 0;
@@ -858,7 +858,6 @@ document.querySelectorAll('#toolbar button, #toolbar-bottom button')
         switch(this.id) {
           case 'delete-mode':   activateDeleteMode(); break;
           case 'set-name':      activateNamingMode();  break;
-          case 'undo':          undoLastPlacement();   break;
           case 'clear-grid':    clearGrid();           break;
           case 'save-layout':   saveLayout();          break;
           case 'restore-layout':document.getElementById('load-layout').click(); break;
@@ -912,10 +911,13 @@ document.getElementById('labels-overlay').classList.add('show-names');
 const isometricCheckbox = document.getElementById('toggle-isometric');
 isometricCheckbox.addEventListener('change', e => {
   const isIso = e.target.checked;
+
   gridWrapper.classList.toggle('isometric', isIso);
   dragGhost.classList.toggle('isometric', isIso);
 
-  // Also update preview
+  const bottomBar = document.getElementById('toolbar-bottom');
+  bottomBar.classList.toggle('isometric', isIso);
+
   if (placementPreview) {
     placementPreview.classList.toggle('isometric', isIso);
   }

@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Bear Trap Planner</title>
   <style>
-    /* Basic CSS styling for the grid and UI elements */
     body {
       font-family: Arial, sans-serif;
       margin: 0; padding: 0;
@@ -15,6 +14,10 @@
 
     #toolbar, #toolbar-bottom {
       margin: 20px 0;
+    }
+    #toolbar-bottom.isometric {
+      margin-top: 80px;
+      transition: transform 0.5s ease;
     }
 
     button {
@@ -31,7 +34,7 @@
 
     #grid-wrapper {
       transition: transform 0.5s ease;
-      transform: none; /* We toggle isometric class below */
+      transform: none;
     }
     #grid {
       width: 800px;   /* 40 * 20px */
@@ -72,7 +75,6 @@
       border: 1px solid #ccc;
       margin: 0 -1px -1px 0; /* Overlap borders */
     }
-    /* Classes for placed objects */
     .bear-trap    { background-color: red; }
     .hq           { background-color: steelblue; }
     .furnace      { background-color: yellowgreen; }
@@ -86,7 +88,6 @@
       border: none !important;
     }
 
-    /* Black border outlines */
     .object-border-top    { border-top:    2px solid black !important; }
     .object-border-right  { border-right:  2px solid black !important; }
     .object-border-bottom { border-bottom: 2px solid black !important; }
@@ -185,17 +186,13 @@
       <img src="icons/delete.png" alt="Delete Icon" style="width:16px; height:16px; margin-right: 5px;" />
       Delete
     </button>
-    <button id="undo">
-      <img src="icons/back.png" alt="Back Icon" style="width:16px; height:16px; margin-right: 5px;" />
-      Undo
-    </button>
     <button id="clear-grid">
       <img src="icons/clear.png" alt="Clear Icon" style="width:16px; height:16px; margin-right: 5px;" />
       Clear Grid
     </button>
     <button id="save-layout">
       <img src="icons/save.png" alt="Save Icon" style="width:16px; height:16px; margin-right: 5px;" />
-      Save
+      Backup
     </button>
     <button id="restore-layout">
       <img src="icons/restore.png" alt="Restore Icon" style="width:16px; height:16px; margin-right: 5px;" />
