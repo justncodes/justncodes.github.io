@@ -1,26 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Bear Trap Planner</title>
   <style>
     /* Basic CSS styling for the grid and UI elements */
     body {
       font-family: Arial, sans-serif;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
+      margin: 0; padding: 0;
+      display: flex; flex-direction: column; align-items: center;
       background-color: #f4f4f4;
     }
 
-    #toolbar {
-      margin: 20px 0;
-    }
-
-    #toolbar-bottom {
+    #toolbar, #toolbar-bottom {
       margin: 20px 0;
     }
 
@@ -30,7 +23,6 @@
       font-size: 16px;
       cursor: pointer;
     }
-
     button.active {
       background-color: #666;
       color: white;
@@ -39,133 +31,70 @@
 
     #grid-wrapper {
       transition: transform 0.5s ease;
-      transform: none;
+      transform: none; /* We toggle isometric class below */
     }
-  
     #grid {
-      width: 800px; /* 40 * 20 */
-      height: 800px;
+      width: 800px;   /* 40 * 20px */
+      height: 800px;  /* 40 * 20px */
       position: relative;
       display: grid;
       grid-template-columns: repeat(40, 20px);
       grid-template-rows: repeat(40, 20px);
       background-color: #ddd;
       overflow: visible;
-      /* contain: paint; */
-      transition: transform 0.5s ease; /* so toggling is smooth */
-      transform-origin: center;
-      transform: none;
+      transition: transform 0.5s ease;
+      transform-origin: center; /* For isometric rotation */
     }
-
-    #grid-container {
-      position: relative;
-      width: 800px;   /* same as grid width */
-      height: 800px;  /* same as grid height */
-    }
-
     #grid.isometric {
       transform: rotate(45deg) skew(-15deg, -15deg);
       margin: 25px;
     }
-
     #grid-wrapper.isometric {
       transform: rotate(45deg) skew(-15deg, -15deg);
       transform-origin: center;
       margin: 25px;
     }
-
     #grid-wrapper.isometric .name-label {
-      transform: translate(-50%, -50%) skew(15deg, 15deg) rotate(-45deg); /* Counteract grid transform */
-    }
-    
-    #labels-overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      z-index: 10; /* Above the grid */
+      /* Counteract the isometric transform for labels */
+      transform: translate(-50%, -50%) skew(15deg, 15deg) rotate(-45deg);
     }
 
-    .name-label {
-      position: absolute;
-      transform: translate(-50%, -50%); /* Center the label */
-      pointer-events: none;
-      font-size: 10px;
-      display: none;
-      transition: none;
+    #grid-container {
+      position: relative;
+      width: 800px;
+      height: 800px;
     }
 
-    .show-names .name-label {
-      display: flex;
-    }
-    
-    #labels-overlay.show-names .name-label {
-      display: block;
-    }
-  
     .tile {
-      width: 20px;
-      height: 20px;
-      background-color: white;
+      width: 20px; height: 20px;
       box-sizing: border-box;
+      background-color: white;
       border: 1px solid #ccc;
       margin: 0 -1px -1px 0; /* Overlap borders */
     }
+    /* Classes for placed objects */
+    .bear-trap    { background-color: red; }
+    .hq           { background-color: steelblue; }
+    .furnace      { background-color: yellowgreen; }
+    .banner       { background-color: darkblue; }
+    .non-buildable-area { background-color: black; }
+    .resource-node{ background-color: brown; }
+    .covered      { background-color: lightblue; }
 
-    .bear-trap {
-      background-color: red;
-    }
-
-    .hq {
-      background-color: steelblue;
-    }
-
-    .furnace {
-      background-color: yellowgreen;
-    }
-
-    .banner {
-      background-color: darkblue;
-    }
-
-    .non-buildable-area {
-      background-color: black;
-    }
-
-    .resource-node {
-      background-color: brown;
-    }
-
-    .covered {
-      background-color: lightblue;
-    }
-
-    .bear-trap, .hq, .furnace, .banner, .non-buildable-area, .resource-node {
+    .bear-trap, .hq, .furnace, .banner, 
+    .non-buildable-area, .resource-node {
       border: none !important;
     }
 
-    .object-border-top {
-      border-top: 2px solid black !important;
-    }
+    /* Black border outlines */
+    .object-border-top    { border-top:    2px solid black !important; }
+    .object-border-right  { border-right:  2px solid black !important; }
+    .object-border-bottom { border-bottom: 2px solid black !important; }
+    .object-border-left   { border-left:   2px solid black !important; }
 
-    .object-border-right {
-      border-right: 2px solid black !important;
-    }
-
-    .object-border-bottom {
-      border-bottom: 2px solid black !important;
-    }
-
-    .object-border-left {
-      border-left: 2px solid black !important;
-    }
-
-    .delete-mode {
-      cursor: not-allowed;
-    }
-
+    /* Delete Mode styling */
+    .delete-mode { cursor: not-allowed; }
+    #grid.delete-mode-active { cursor: not-allowed; }
     .delete-highlight {
       position: absolute;
       pointer-events: none;
@@ -173,44 +102,66 @@
       box-sizing: border-box;
       z-index: 1;
       background: transparent;
-      margin: 0;
-      padding: 0;
+      margin: 0; padding: 0;
     }
 
-    #grid.delete-mode-active {
-      cursor: not-allowed;
-    }
-
+    /* Placement Preview styling */
     .placement-preview {
-        background-color: rgba(200, 200, 200, 0.3);
-        box-sizing: border-box;
-        transition: all 0.1s ease;
+      position: absolute;
+      pointer-events: none;
+      opacity: 0.3; /* or 0.7, your choice */
+      transition: transform 0.5s ease;
+      z-index: 2;
+      border: 2px solid #00ff00;
     }
-
+    .placement-preview.isometric {
+      transform-origin: center center;
+    }
     .placement-preview.invalid {
-        background-color: rgba(255, 0, 0, 0.1);
+      background-color: rgba(255, 0, 0, 0.1);
     }
 
+    /* Drag Ghost is centered on the mouse via transform translate(-50%, -50%) */
     #drag-ghost {
       position: absolute;
       pointer-events: none;
       opacity: 0.8;
-      transition: transform 0.5s ease;
+      transform: translate(-50%, -50%);
       z-index: 100;
+      display: none;
     }
-    
     #drag-ghost.isometric {
       transform-origin: center center;
       transform: translate(-50%, -50%) rotate(45deg) skew(-15deg, -15deg);
+    }
+
+    /* Labels Overlay */
+    #labels-overlay {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 10; /* Above the grid */
+    }
+    .name-label {
+      position: absolute;
+      transform: translate(-50%, -50%); /* Center the label text */
+      pointer-events: none;
+      font-size: 10px;
+      display: none;
+      transition: none;
+    }
+    .show-names .name-label {
+      display: flex;
+    }
+    #labels-overlay.show-names .name-label {
+      display: block;
     }
   </style>
 </head>
 <body>
   <h1>Bear Trap Planner</h1>
-  <!-- <p id="subtext" style="text-align:center; margin: 5px 5px; font-style: italic;">
-    Place objects on the map and plan your layout. Don't forget to save!
-  </p> -->
-  <div id="toolbar" style="margin: 5px 5px;">
+
+  <div id="toolbar">
     <button id="add-bear-trap">Bear Trap</button>
     <button id="add-hq">HQ</button>
     <button id="add-furnace">Furnace</button>
@@ -220,14 +171,9 @@
   </div>
 
   <!-- Ghost element for dragging preview -->
-  <div id="drag-ghost" style="
-    display: none;
-    position: absolute;
-    pointer-events: none;
-    opacity: 0.8;">
-  </div>
+  <div id="drag-ghost"></div>
 
-  <div id="grid-container" style="position: relative; width: 800px; height: 800px;">
+  <div id="grid-container">
     <div id="grid-wrapper">
       <div id="grid"></div>
     </div>
@@ -236,39 +182,29 @@
 
   <div id="toolbar-bottom">
     <button id="delete-mode">
-      <img src="icons/delete.png"
-      alt="Delete Icon"
-      style="width:16px; height:16px; margin-right: 5px;" />
+      <img src="icons/delete.png" alt="Delete Icon" style="width:16px; height:16px; margin-right: 5px;" />
       Delete
     </button>
     <button id="undo">
-      <img src="icons/back.png"
-      alt="Back Icon"
-      style="width:16px; height:16px; margin-right: 5px;" />
+      <img src="icons/back.png" alt="Back Icon" style="width:16px; height:16px; margin-right: 5px;" />
       Undo
     </button>
     <button id="clear-grid">
-      <img src="icons/clear.png"
-      alt="Clear Icon"
-      style="width:16px; height:16px; margin-right: 5px;" />
+      <img src="icons/clear.png" alt="Clear Icon" style="width:16px; height:16px; margin-right: 5px;" />
       Clear Grid
     </button>
     <button id="save-layout">
-      <img src="icons/save.png"
-      alt="Save Icon"
-      style="width:16px; height:16px; margin-right: 5px;" />
+      <img src="icons/save.png" alt="Save Icon" style="width:16px; height:16px; margin-right: 5px;" />
       Save
     </button>
     <button id="restore-layout">
-      <img src="icons/restore.png"
-      alt="Restore Icon"
-      style="width:16px; height:16px; margin-right: 5px;" />
+      <img src="icons/restore.png" alt="Restore Icon" style="width:16px; height:16px; margin-right: 5px;" />
       Restore
     </button>
     <input type="file" id="load-layout" style="display: none;" />
     <button id="set-name">Set Name</button>
     <label>
-      <input type="checkbox" id="toggle-names" checked />
+      <input type="checkbox" id="toggle-names" checked/>
       Show Names
     </label>
     <label style="margin-left: 15px;">
