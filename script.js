@@ -6,6 +6,8 @@ const gridWrapper   = document.getElementById('grid-wrapper');
 const gridSize      = 40; // 40x40
 const dragGhost     = document.getElementById('drag-ghost');
 
+let cachedTiles = [];
+
 let currentObject   = null;   // For placing NEW objects
 let placedObjects   = [];     // All placed objects
 
@@ -24,6 +26,8 @@ let showNames       = true;
 
 let activeMode      = null; // 'place', 'delete', 'name'
 let currentPlacementType = null; // e.g. 'bear-trap', 'hq', etc.
+
+let isUpdating = false;
 
 // Placement preview
 let placementPreview = null;
@@ -58,12 +62,13 @@ function createGrid() {
     const tile = document.createElement('div');
     tile.classList.add('tile');
     tile.dataset.index = i;
-
     // Mouse down could start a drag or naming
     tile.addEventListener('mousedown', handleTileMouseDown);
-
     grid.appendChild(tile);
   }
+
+  // Update the cachedTiles array now that the grid is populated
+  cachedTiles = Array.from(document.querySelectorAll('.tile'));
 
   // Listen for mousemove/up at the document level
   document.addEventListener('mousemove', handleMouseMove);
@@ -197,45 +202,50 @@ function handleTileClick(e) {
 }
 
 function handleMouseMove(e) {
-  // If not dragging an existing object, do nothing here
   if (!isDragging || !draggedObject) return;
+  if (isUpdating) return;
+  isUpdating = true;
+  
+  requestAnimationFrame(() => {
+    try {
+      // Update ghost position so its center follows the cursor.
+      dragGhost.style.left = e.pageX + 'px';
+      dragGhost.style.top  = e.pageY + 'px';
 
-  // 1) Position the ghost so its center is at (pageX, pageY)
-  //    (CSS has translate(-50%, -50%) to center it)
-  dragGhost.style.left = e.pageX + 'px';
-  dragGhost.style.top  = e.pageY + 'px';
+      // Clear previous highlights (borders, coverage, etc.)
+      clearRealTimeCoverage();
 
-  // 2) Clear previous coverage/borders
-  clearRealTimeCoverage();
-
-  // 3) Find tile under mouse => highlight NxN
-  const tileUnderMouse = getTileFromMouseEvent(e);
-  if (!tileUnderMouse) return;
-
-  // Compute center-based top-left
-  const size = draggedObject.size;
-  const half = (size - 1) / 2;
-  let row = tileUnderMouse.row - half;
-  let col = tileUnderMouse.col - half;
-  row = Math.floor(row);
-  col = Math.floor(col);
-
-  // If in bounds, highlight coverage/borders in real-time
-  if (
-    row >= 0 && col >= 0 &&
-    row + size <= gridSize && col + size <= gridSize
-  ) {
-    // Example coverage: if HQ => highlight 7-tile radius
-    if (draggedObject.className === 'hq') {
-      highlightTerritory(row + 1, col + 1, 7);
+      // Determine the tile under the mouse.
+      const tileUnderMouse = getTileFromMouseEvent(e);
+      if (tileUnderMouse) {
+        const size = draggedObject.size;
+        const half = (size - 1) / 2;
+        let row = Math.floor(tileUnderMouse.row - half);
+        let col = Math.floor(tileUnderMouse.col - half);
+        
+        // Clamp values to ensure they're within bounds.
+        if (row < 0) row = 0;
+        if (col < 0) col = 0;
+        if (row + size > gridSize) row = gridSize - size;
+        if (col + size > gridSize) col = gridSize - size;
+        
+        // Update visual cues if placement is within bounds.
+        if (row >= 0 && col >= 0 && row + size <= gridSize && col + size <= gridSize) {
+          if (draggedObject.className === 'hq') {
+            highlightTerritory(row + 1, col + 1, 7);
+          } else if (draggedObject.className === 'banner') {
+            highlightTerritory(row, col, 3);
+          }
+          highlightObjectBorderCenterBased(row, col, size);
+        }
+      }
+    } catch (error) {
+      console.error('Error during mousemove update:', error);
+    } finally {
+      // Ensure that isUpdating is always reset.
+      isUpdating = false;
     }
-    // If banner => radius 3
-    else if (draggedObject.className === 'banner') {
-      highlightTerritory(row, col, 3);
-    }
-    // Then highlight the NxN border
-    highlightObjectBorderCenterBased(row, col, size);
-  }
+  });
 }
 
 function handleMouseUp(e) {
@@ -358,7 +368,7 @@ function findObjectAt(row, col) {
 }
 
 function removeObjectFromGrid(obj) {
-  const tiles = document.querySelectorAll('.tile');
+  const tiles = cachedTiles;
   for (let r = 0; r < obj.size; r++) {
     for (let c = 0; c < obj.size; c++) {
       const index = (obj.row + r) * gridSize + (obj.col + c);
@@ -453,26 +463,20 @@ function getTileFromMouseEvent(e) {
 
 // Clears highlight/coverage on all tiles, then re-draw existing objects
 function clearRealTimeCoverage() {
-  const tiles = document.querySelectorAll('.tile');
-  tiles.forEach(tile => {
-    if (
-      !tile.classList.contains('bear-trap') &&
-      !tile.classList.contains('hq') &&
-      !tile.classList.contains('furnace') &&
-      !tile.classList.contains('banner') &&
-      !tile.classList.contains('resource-node') &&
-      !tile.classList.contains('non-buildable-area')
-    ) {
-      tile.classList.remove('covered');
-    }
+  cachedTiles.forEach(tile => {
+    // Remove any coverage (if applicable)
+    tile.classList.remove('covered');
+    // Remove any border classes
     tile.classList.remove(
-      'object-border-top','object-border-right',
-      'object-border-bottom','object-border-left'
+      'object-border-top',
+      'object-border-right',
+      'object-border-bottom',
+      'object-border-left'
     );
   });
-
-  // Re-draw coverage/borders for all placed objects except the one being dragged
-  for (const obj of placedObjects) {
+  
+  // Re-draw borders (and coverage) for all placed objects except the one being dragged
+  placedObjects.forEach(obj => {
     if (obj !== draggedObject) {
       applyObjectBorder(obj.row, obj.col, obj.size);
       if (obj.className === 'hq') {
@@ -481,23 +485,22 @@ function clearRealTimeCoverage() {
         highlightTerritory(obj.row, obj.col, 3);
       }
     }
-  }
+  });
 }
 
 // Center-based border highlight
 function highlightObjectBorderCenterBased(topLeftRow, topLeftCol, size) {
-  const tiles = document.querySelectorAll('.tile');
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
       const index = (topLeftRow + r) * gridSize + (topLeftCol + c);
-      const tile  = tiles[index];
+      const tile = cachedTiles[index];
       if (!tile) continue;
 
-      // Perimeter
-      if (r === 0)         tile.classList.add('object-border-top');
-      if (r === size - 1)  tile.classList.add('object-border-bottom');
-      if (c === 0)         tile.classList.add('object-border-left');
-      if (c === size - 1)  tile.classList.add('object-border-right');
+      // Apply border classes to the perimeter of the object
+      if (r === 0) tile.classList.add('object-border-top');
+      if (r === size - 1) tile.classList.add('object-border-bottom');
+      if (c === 0) tile.classList.add('object-border-left');
+      if (c === size - 1) tile.classList.add('object-border-right');
     }
   }
 }
@@ -505,7 +508,7 @@ function highlightObjectBorderCenterBased(topLeftRow, topLeftCol, size) {
 // "can I place size×size at row,col?"
 function canPlaceObject(row, col, size) {
   if (row + size > gridSize || col + size > gridSize) return false;
-  const tiles = document.querySelectorAll('.tile');
+  const tiles = cachedTiles;
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
       const index = (row + r) * gridSize + (col + c);
@@ -528,7 +531,7 @@ function canPlaceObject(row, col, size) {
 
 // Coverage highlight for HQ/Banner
 function highlightTerritory(centerRow, centerCol, radius) {
-  const tiles = document.querySelectorAll('.tile');
+  const tiles = cachedTiles;
   for (let r = -radius; r <= radius; r++) {
     for (let c = -radius; c <= radius; c++) {
       const rr = centerRow + r;
@@ -555,7 +558,7 @@ function highlightTerritory(centerRow, centerCol, radius) {
     Placing and Drawing
 -------------------------------------------------- */
 function placeObjectOnGrid(row, col, className, size, obj) {
-  const tiles = document.querySelectorAll('.tile');
+  const tiles = cachedTiles;
   // Fill the NxN area
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
@@ -602,7 +605,7 @@ function placeObjectOnGrid(row, col, className, size, obj) {
 
 function applyObjectBorder(row, col, size) {
   // Basic black outline on the NxN perimeter
-  const tiles = document.querySelectorAll('.tile');
+  const tiles = cachedTiles;
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
       const index = (row + r) * gridSize + (col + c);
@@ -679,7 +682,7 @@ function clearDeleteHighlight() {
     Misc / Utility
 -------------------------------------------------- */
 function clearGrid() {
-  const tiles = document.querySelectorAll('.tile');
+  const tiles = cachedTiles;
   tiles.forEach(t => {
     t.className = 'tile'; // reset
     t.dataset.name = '';
@@ -699,7 +702,7 @@ function clearGrid() {
 
 function clearGridVisualOnly() {
   // Wipes the tile classes but not the placedObjects array
-  const tiles = document.querySelectorAll('.tile');
+  const tiles = cachedTiles;
   tiles.forEach(t => {
     t.className = 'tile';
     t.dataset.name = '';
