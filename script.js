@@ -269,71 +269,75 @@ function handleMouseMove(e) {
   isUpdating = true;
   requestAnimationFrame(() => {
     try {
-      const mouseX = e.pageX;
-      const mouseY = e.pageY;
-      if (lastMousePos.x === mouseX && lastMousePos.y === mouseY) {
-        isUpdating = false;
-        return;
-      }
-      lastMousePos = { x: mouseX, y: mouseY };
-
-      // Update ghost position so its center follows the cursor
-      dragGhost.style.left = `${mouseX}px`;
-      dragGhost.style.top = `${mouseY}px`;
-
-      // Clear previous highlights
-      clearRealTimeCoverage();
-
-      // Determine the tile under the mouse
       const tileUnderMouse = getTileFromMouseEvent(e);
       if (!tileUnderMouse) {
         isUpdating = false;
         return;
       }
 
-      // Calculate the new top-left position for the dragged object
+      // Calculate grid position based on tile size and object size
+      const tileSize = 20;
       const size = draggedObject.size;
       const half = (size - 1) / 2;
+
+      // Calculate new grid coordinates
       let row = Math.floor(tileUnderMouse.row - half);
       let col = Math.floor(tileUnderMouse.col - half);
 
-      // Clamp the position to grid boundaries
+      // Clamp to grid boundaries
       row = Math.max(0, Math.min(row, gridSize - size));
       col = Math.max(0, Math.min(col, gridSize - size));
 
-      // Update visual cues for borders and coverage
+      // Update drag ghost position in grid coordinates
+      const left = col * tileSize;
+      const top = row * tileSize;
+
+      dragGhost.style.left = `${left}px`;
+      dragGhost.style.top = `${top}px`;
+      dragGhost.style.width = `${size * tileSize}px`;
+      dragGhost.style.height = `${size * tileSize}px`;
+
+      // Clear previous highlights
+      clearRealTimeCoverage();
+
+      // Update visual cues if within bounds
       if (row >= 0 && col >= 0 && row + size <= gridSize && col + size <= gridSize) {
+        // Highlight territory if needed
         if (draggedObject.className === 'hq') {
           highlightTerritory(row + 1, col + 1, 7);
         } else if (draggedObject.className === 'banner') {
           highlightTerritory(row, col, 3);
         }
+
+        // Highlight object borders
         highlightObjectBorderCenterBased(row, col, size);
       }
 
-      // Update the label position for the dragged object (if it has a name)
-      if (draggedObject && draggedObject.name) {
+      // Update label position if needed
+      if (draggedObject?.name) {
         const label = document.querySelector(`[data-object-id="${draggedObject.id}"]`);
         if (label) {
-          // Compute base grid coordinates
-          const baseX = col * 20 + (size * 20) / 2;
-          const baseY = row * 20 + (size * 20) / 2;
-          
-          // Create a temporary element to measure transformed position
+          // Calculate the center of the dragged object in grid coordinates
+          const centerX = col * tileSize + (size * tileSize) / 2;
+          const centerY = row * tileSize + (size * tileSize) / 2;
+
+          // Use a dummy element to account for isometric transform
           const dummy = document.createElement('div');
           dummy.style.position = 'absolute';
-          dummy.style.left = `${baseX}px`;
-          dummy.style.top = `${baseY}px`;
+          dummy.style.left = `${centerX}px`;
+          dummy.style.top = `${centerY}px`;
           dummy.style.width = '1px';
           dummy.style.height = '1px';
+
+          // Append to grid wrapper to inherit transforms
           gridWrapper.appendChild(dummy);
-          
           const dummyRect = dummy.getBoundingClientRect();
           gridWrapper.removeChild(dummy);
-          
+
+          // Position the label relative to the grid container
           const containerRect = document.getElementById('grid-container').getBoundingClientRect();
           label.style.left = `${dummyRect.left - containerRect.left}px`;
-          label.style.top  = `${dummyRect.top - containerRect.top}px`;
+          label.style.top = `${dummyRect.top - containerRect.top}px`;
         }
       }
     } catch (error) {
@@ -467,13 +471,21 @@ function checkOverlap(r1, c1, s1, r2, c2, s2) {
 
 function showDragGhost(obj) {
   dragGhost.innerHTML = '';
+  dragGhost.style.display = 'block';
+  
+  // Set ghost dimensions based on object size
+  const tileSize = 20;
+  dragGhost.style.width = `${obj.size * tileSize}px`;
+  dragGhost.style.height = `${obj.size * tileSize}px`;
+  
+  // Create visual representation
   for (let r = 0; r < obj.size; r++) {
     const rowDiv = document.createElement('div');
     rowDiv.style.display = 'flex';
     for (let c = 0; c < obj.size; c++) {
       const cell = document.createElement('div');
-      cell.style.width = '20px';
-      cell.style.height = '20px';
+      cell.style.width = `${tileSize}px`;
+      cell.style.height = `${tileSize}px`;
       cell.style.boxSizing = 'border-box';
       cell.style.border = '1px solid #999';
       cell.classList.add(obj.className);
@@ -481,7 +493,10 @@ function showDragGhost(obj) {
     }
     dragGhost.appendChild(rowDiv);
   }
-  dragGhost.style.display = 'block';
+
+  // Match grid transformations
+  const isIso = document.getElementById('toggle-isometric').checked;
+  dragGhost.classList.toggle('isometric', isIso);
 }
 
 // Invert transform for isometric, then figure out which tile

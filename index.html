@@ -122,18 +122,12 @@
       background-color: rgba(255, 0, 0, 0.1);
     }
 
-    /* Drag Ghost is centered on the mouse via transform translate(-50%, -50%) */
     #drag-ghost {
       position: absolute;
       pointer-events: none;
       opacity: 0.8;
-      transform: translate(-50%, -50%);
       z-index: 100;
       display: none;
-    }
-    #drag-ghost.isometric {
-      transform-origin: center center;
-      transform: translate(-50%, -50%) rotate(45deg) skew(-15deg, -15deg);
     }
 
     /* Labels Overlay */
@@ -149,7 +143,6 @@
       pointer-events: none;
       font-size: 10px;
       display: none;
-      transition: none;
     }
     .show-names .name-label {
       display: flex;
@@ -161,7 +154,6 @@
 </head>
 <body>
   <h1>Bear Trap Planner</h1>
-
   <div id="toolbar">
     <button id="add-bear-trap">Bear Trap</button>
     <button id="add-hq">HQ</button>
@@ -170,10 +162,6 @@
     <button id="add-resource-node">Resource Node</button>
     <button id="add-non-buildable-area">Non-Buildable Area</button>
   </div>
-
-  <!-- Ghost element for dragging preview -->
-  <div id="drag-ghost"></div>
-
   <div id="grid-container">
     <div id="loading-overlay" style="
       position: absolute;
@@ -194,6 +182,7 @@
     </div>
     <div id="grid-wrapper">
       <div id="grid"></div>
+      <div id="drag-ghost"></div>
     </div>
     <div id="labels-overlay"></div>
   </div>
