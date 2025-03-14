@@ -1,1078 +1,1359 @@
-// Bear Trap Planner v0.1 alpha
+/**
+ * Bear Trap Planner v0.2 beta
+ * A planning tool for Whiteout Survival bear trap layouts
+ */
 
-// References to DOM
-const grid          = document.getElementById('grid');
-const gridWrapper   = document.getElementById('grid-wrapper');
-const gridSize      = 40; // 40x40
-const dragGhost     = document.getElementById('drag-ghost');
+// Use an IIFE to create proper scope and avoid polluting global namespace
+(function() {
+  'use strict';
 
-let cachedTiles = [];
-
-let currentObject   = null;   // For placing NEW objects
-let placedObjects   = [];     // All placed objects
-
-let coverageMap = []; // Tracks which tiles are covered by HQ/banners
-let territoryCache = new WeakMap(); // Stores coverage areas per object
-
-// Counters for specific types
-let hqCount         = 0;
-let bearTrapCount   = 0;
-
-// Mode flags
-let isDragging      = false;
-let draggedObject   = null;   // Which placed object is being dragged
-let dragOriginalPos = null;   // {row, col} before drag started
-
-let isDeleteMode    = false;
-let isNamingMode    = false;
-let showNames       = true;
-
-let activeMode      = null; // 'place', 'delete', 'name'
-let currentPlacementType = null; // e.g. 'bear-trap', 'hq', etc.
-
-let isUpdating = false; // Flag to throttle updates
-let lastMousePos = { x: null, y: null }; // Cache last mouse position
-
-// Placement preview
-let placementPreview = null;
-let isValidPlacement = false;
-
-// Delete highlight
-let deleteHighlightElement = null;
-let lastHoveredObject = null;
-
-// Additional style injection for .placement-preview
-const dynamicStyle = document.createElement('style');
-dynamicStyle.textContent = `
-  .placement-preview {
-    position: absolute;
-    pointer-events: none;
-    opacity: 0.7;
-    z-index: 2;
-    border: 2px solid #00ff00;
-  }
-  .placement-preview.invalid {
-    border-color: #ff0000;
-    opacity: 0.5;
-  }
-`;
-document.head.appendChild(dynamicStyle);
-
-/* --------------------------------------------------
-    Initialization
--------------------------------------------------- */
-function createGrid() {
-  for (let i = 0; i < gridSize * gridSize; i++) {
-    const tile = document.createElement('div');
-    tile.classList.add('tile');
-    tile.dataset.index = i;
-    // Mouse down could start a drag or naming
-    tile.addEventListener('mousedown', handleTileMouseDown);
-    grid.appendChild(tile);
-  }
-
-  // Update the cachedTiles array now that the grid is populated
-  cachedTiles = Array.from(document.querySelectorAll('.tile'));
-
-  // Listen for mousemove/up at the document level
-  document.addEventListener('mousemove', handleMouseMove);
-  document.addEventListener('mouseup', handleMouseUp);
-  
-  // Initialize coverage map
-  coverageMap = Array(gridSize).fill().map(() => 
-    Array(gridSize).fill().map(() => ({
-      hq: false,
-      banner: false
-    }))
-  );
-}
-
-function refreshGrid() {
-  // 1. Clear the grid visual state (removing all extra classes and labels)
-  clearGridVisualOnly();
-
-  // 2. Place the "base" object tiles for each object.
-  placedObjects.forEach(obj => {
-    placeObjectOnGrid(obj.row, obj.col, obj.className, obj.size, obj);
-  });
-
-  // 3. Reset the coverage map.
-  coverageMap = Array(gridSize).fill().map(() =>
-    Array(gridSize).fill().map(() => ({ hq: false, banner: false }))
-  );
-
-  // 4. For each HQ/Banner, compute its coverage and update coverageMap.
-  placedObjects.forEach(obj => {
-    if (obj.className === 'hq') {
-      const coverageArea = calculateCoverage(obj.row + 1, obj.col + 1, 7);
-      coverageArea.forEach(({ r, c }) => coverageMap[r][c].hq = true);
-    } else if (obj.className === 'banner') {
-      const coverageArea = calculateCoverage(obj.row, obj.col, 3);
-      coverageArea.forEach(({ r, c }) => coverageMap[r][c].banner = true);
+  /* ===========================================
+     Configuration Constants
+  ============================================== */
+  const CONFIG = {
+    gridSize: 40,         // 40x40 grid
+    tileSize: 20,         // 20px per tile
+    objectTypes: {
+      'bear-trap': { size: 3, maxCount: 2 },
+      'hq': { size: 3, maxCount: 1 },
+      'furnace': { size: 2, maxCount: Infinity },
+      'banner': { size: 1, maxCount: Infinity },
+      'resource-node': { size: 2, maxCount: Infinity },
+      'non-buildable-area': { size: 1, maxCount: Infinity }
+    },
+    coverageRadius: {
+      'hq': 7,
+      'banner': 3
+    },
+    furnaceColors: {
+      1: '#FFD700', // Gold for 1st row
+      2: '#FFA500', // Orange for 2nd row
+      3: '#FF8C00', // Dark orange for 3rd row
+      other: '#FF6347', // Tomato for other rows
     }
-  });
+  };
 
-  // 5. Apply the "covered" class only on tiles that are not occupied by an object.
-  for (let r = 0; r < gridSize; r++) {
-    for (let c = 0; c < gridSize; c++) {
-      const index = r * gridSize + c;
-      const tile = cachedTiles[index];
-      // Only add "covered" if the tile is in coverage
-      // and does NOT already have one of the object classes.
-      if ((coverageMap[r][c].hq || coverageMap[r][c].banner) &&
-          !tile.classList.contains('hq') &&
-          !tile.classList.contains('bear-trap') &&
-          !tile.classList.contains('furnace') &&
-          !tile.classList.contains('banner') &&
-          !tile.classList.contains('resource-node') &&
-          !tile.classList.contains('non-buildable-area')) {
-        tile.classList.add('covered');
+  /* ===========================================
+     State Management
+  ============================================== */
+  const STATE = {
+    placedObjects: [],    // All placed objects
+    objectCounts: {       // Current count of each object type
+      'bear-trap': 0,
+      'hq': 0
+    },
+    mode: {               // Current interaction mode
+      active: null,       // 'place', 'delete', 'name'
+      currentType: null,  // Current object type for placement
+      currentObject: null // Current object definition for placement
+    },
+    dragging: {
+      active: false,
+      object: null,
+      originalPos: null
+    },
+    coverageMap: [],      // Tracks which tiles are covered by HQ/banners
+    isUpdating: false,    // Flag to throttle updates
+    lastMousePos: { x: null, y: null },
+    lastHoveredObject: null
+  };
+
+  /* ===========================================
+     DOM References
+  ============================================== */
+  const DOM = {
+    grid: null,
+    gridWrapper: null,
+    cachedTiles: [],
+    dragGhost: null,
+    placementPreview: null,
+    deleteHighlight: null,
+    labelsOverlay: null,
+    loadingOverlay: null
+  };
+
+  /* ===========================================
+     Initialization
+  ============================================== */
+  function init() {
+    // Cache DOM elements
+    cacheDOMElements();
+    
+    // Create the grid
+    createGrid();
+    
+    // Initialize coverage map
+    initCoverageMap();
+    
+    // Set up event listeners
+    setupEventListeners();
+    
+    // Create delete highlight
+    createDeleteHighlight();
+  }
+
+  function cacheDOMElements() {
+    DOM.grid = document.getElementById('grid');
+    DOM.gridWrapper = document.getElementById('grid-wrapper');
+    DOM.dragGhost = document.getElementById('drag-ghost');
+    DOM.labelsOverlay = document.getElementById('labels-overlay');
+    DOM.loadingOverlay = document.getElementById('loading-overlay');
+  }
+
+  function createGrid() {
+    const { gridSize } = CONFIG;
+    
+    for (let i = 0; i < gridSize * gridSize; i++) {
+      const tile = document.createElement('div');
+      tile.classList.add('tile');
+      tile.dataset.index = i;
+      // Mouse down could start a drag or naming
+      tile.addEventListener('mousedown', handleTileMouseDown);
+      DOM.grid.appendChild(tile);
+    }
+
+    // Update the cachedTiles array now that the grid is populated
+    DOM.cachedTiles = Array.from(document.querySelectorAll('.tile'));
+  }
+
+  function initCoverageMap() {
+    const { gridSize } = CONFIG;
+    
+    STATE.coverageMap = Array(gridSize).fill().map(() => 
+      Array(gridSize).fill().map(() => ({
+        hq: false,
+        banner: false
+      }))
+    );
+  }
+
+  function setupEventListeners() {
+    // Global mouse events for drag and drop
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    
+    // Grid events
+    DOM.grid.addEventListener('mousemove', handlePlacementPreview);
+    DOM.grid.addEventListener('mouseleave', () => {
+      if (DOM.placementPreview) DOM.placementPreview.style.display = 'none';
+    });
+    
+    // Grid mouse move for delete highlight
+    DOM.grid.addEventListener('mousemove', handleDeleteHighlightUpdate);
+    
+    // Toolbar buttons
+    setupToolbarListeners();
+    
+    // Toggle labels and isometric view
+    setupToggleListeners();
+    
+    // File input for loading layout
+    document.getElementById('load-layout').addEventListener('change', loadLayout);
+  }
+
+  function setupToolbarListeners() {
+    document.querySelectorAll('#toolbar button, #toolbar-bottom button')
+      .forEach(btn => {
+        btn.addEventListener('click', function() {
+          const isSameButton = this.classList.contains('active');
+          deactivateAllModes();
+          
+          if (!isSameButton) {
+            switch(this.id) {
+              case 'delete-mode':    activateDeleteMode(); break;
+              case 'set-name':       activateNamingMode(); break;
+              case 'clear-grid':     clearGrid(); break;
+              case 'save-layout':    saveLayout(); break;
+              case 'restore-layout': document.getElementById('load-layout').click(); break;
+              default:
+                if (this.id.startsWith('add-')) {
+                  activatePlacementMode(this.id.replace('add-', ''));
+                }
+            }
+          }
+        });
+      });
+  }
+
+  function setupToggleListeners() {
+    // Toggle name labels
+    document.getElementById('toggle-names').addEventListener('change', e => {
+      const showNames = e.target.checked;
+      DOM.labelsOverlay.classList.toggle('show-names', showNames);
+      refreshGrid();
+    });
+    DOM.labelsOverlay.classList.add('show-names');
+
+    // Toggle isometric
+    const isometricCheckbox = document.getElementById('toggle-isometric');
+    isometricCheckbox.addEventListener('change', e => {
+      const isIso = e.target.checked;
+
+      DOM.gridWrapper.classList.toggle('isometric', isIso);
+      DOM.dragGhost.classList.toggle('isometric', isIso);
+
+      const bottomBar = document.getElementById('toolbar-bottom');
+      bottomBar.classList.toggle('isometric', isIso);
+
+      if (DOM.placementPreview) {
+        DOM.placementPreview.classList.toggle('isometric', isIso);
       }
-    }
+      
+      // Reposition labels smoothly
+      animateLabelPositions(500);
+    });
   }
 
-  // 6. Apply borders for every object in one pass.
-  placedObjects.forEach(obj => {
-    applyObjectBorder(obj.row, obj.col, obj.size);
-  });
-
-  // 7. Re-create labels for objects that have names.
-  const labelsOverlay = document.getElementById('labels-overlay');
-  placedObjects.forEach(obj => {
-    if (obj.name) {
-      const labelDiv = document.createElement('div');
-      labelDiv.classList.add('name-label');
-      labelDiv.textContent = obj.name;
-      labelDiv.dataset.objectId = obj.id;
-      labelsOverlay.appendChild(labelDiv);
+  /* ===========================================
+     Event Handlers
+  ============================================== */
+  function handleTileMouseDown(e) {
+    const { active: activeMode } = STATE.mode;
+    
+    if (activeMode === 'delete') {
+      handleDeleteClick(e);
+      return;
     }
-  });
 
-  // 8. Finally, position the labels.
-  refreshLabelPositions();
-}
+    // Placing new object?
+    if (STATE.mode.currentObject) {
+      handlePlacementClick(e);
+      return;
+    }
 
+    // Naming mode?
+    if (activeMode === 'name') {
+      handleNameSetting(e);
+      return;
+    }
 
-/* --------------------------------------------------
-    Mouse / Dragging
--------------------------------------------------- */
-function handleTileMouseDown(e) {
-  if (isDeleteMode) {
+    // Otherwise, check if user wants to drag an existing object
+    handleDragStart(e);
+  }
+
+  function handleDeleteClick(e) {
     const tile = getTileFromMouseEvent(e);
     if (!tile) return;
 
     const obj = findObjectAt(tile.row, tile.col);
     if (obj) {
-      const index = placedObjects.indexOf(obj);
-      if (index >= 0) {
-        placedObjects.splice(index, 1);
-        if (obj.className === 'hq') hqCount--;
-        if (obj.className === 'bear-trap') bearTrapCount--;
-        clearGridVisualOnly();
-        refreshGrid();
+      removeObject(obj);
+      refreshGrid();
+      updateStatsDisplay();
+    }
+  }
+
+  function handlePlacementClick(e) {
+    const { currentObject } = STATE.mode;
+    
+    if (!currentObject || STATE.mode.active !== 'place') return;
+
+    // Check if we already have the allowed number of each object
+    const typeConfig = CONFIG.objectTypes[currentObject.className];
+    if (typeConfig && 
+        STATE.objectCounts[currentObject.className] >= typeConfig.maxCount) {
+      alert(`Only ${typeConfig.maxCount} ${currentObject.className} allowed!`);
+      return;
+    }
+
+    const tile = getTileFromMouseEvent(e);
+    if (!tile) return;
+
+    // Center-based approach for new object
+    const size = currentObject.size;
+    const half = (size - 1) / 2; // can be 1 for 3x3, or 0.5 for 2x2, etc.
+
+    let row = Math.floor(tile.row - half);
+    let col = Math.floor(tile.col - half);
+
+    // Clamp to grid boundaries
+    row = Math.max(0, Math.min(row, CONFIG.gridSize - size));
+    col = Math.max(0, Math.min(col, CONFIG.gridSize - size));
+
+    // Validate placement
+    if (!canPlaceObject(row, col, size)) {
+      return;
+    }
+
+    // Create the object
+    addObject({
+      row, col,
+      size,
+      className: currentObject.className,
+      name: ''
+    });
+
+    refreshGrid();
+    updateStatsDisplay();
+  }
+
+  function handleDragStart(e) {
+    const tileIndex = parseInt(e.target.dataset.index);
+    const row = Math.floor(tileIndex / CONFIG.gridSize);
+    const col = tileIndex % CONFIG.gridSize;
+
+    const obj = findObjectAt(row, col);
+    if (obj) {
+      STATE.dragging.active = true;
+      STATE.dragging.object = obj;
+      STATE.dragging.originalPos = { row: obj.row, col: obj.col };
+
+      removeObjectFromGrid(obj); // Temporarily remove it visually
+      showDragGhost(obj);
+
+      // Prevent default to avoid text selection
+      e.preventDefault();
+    }
+  }
+
+  function handleMouseMove(e) {
+    if (!STATE.dragging.active || !STATE.dragging.object) return;
+    if (STATE.isUpdating) return;
+
+    STATE.isUpdating = true;
+    requestAnimationFrame(() => {
+      try {
+        updateDragGhostPosition(e);
+      } catch (error) {
+        console.error('Error during mousemove update:', error);
+      } finally {
+        STATE.isUpdating = false;
+      }
+    });
+  }
+
+  function handleMouseUp(e) {
+    if (!STATE.dragging.active || !STATE.dragging.object) return;
+    STATE.dragging.active = false;
+
+    // Hide ghost
+    DOM.dragGhost.style.display = 'none';
+
+    const tileUnderMouse = getTileFromMouseEvent(e);
+    if (!tileUnderMouse) {
+      // Dropped outside => revert to original
+      revertDraggedObject();
+      return;
+    }
+
+    finalizeDrag(tileUnderMouse);
+  }
+
+  function handleDeleteHighlightUpdate(e) {
+    if (STATE.mode.active !== 'delete') return;
+    
+    const tile = getTileFromMouseEvent(e);
+    if (!tile) {
+      clearDeleteHighlight();
+      return;
+    }
+    
+    const obj = findObjectAt(tile.row, tile.col);
+    if (obj && obj !== STATE.lastHoveredObject) {
+      updateDeleteHighlight(obj);
+      STATE.lastHoveredObject = obj;
+    } else if (!obj) {
+      clearDeleteHighlight();
+      STATE.lastHoveredObject = null;
+    }
+  }
+
+  function handleNameSetting(e) {
+    const tileIndex = parseInt(e.target.dataset.index);
+    const row = Math.floor(tileIndex / CONFIG.gridSize);
+    const col = tileIndex % CONFIG.gridSize;
+
+    // Find object
+    const obj = findObjectAt(row, col);
+    if (!obj) {
+      alert('No object here to name.');
+      return;
+    }
+
+    // Restrict naming to certain classes
+    const allowed = ['furnace', 'hq', 'bear-trap'];
+    if (!allowed.includes(obj.className)) {
+      alert('Naming only for HQ, Bear Traps, and Furnaces.');
+      return;
+    }
+
+    const newName = prompt(`Enter a name for this ${obj.className}:`, obj.name || '');
+    if (newName === null) return; // canceled
+
+    obj.name = newName.trim();
+    refreshGrid();
+  }
+
+  function handlePlacementPreview(e) {
+    const { currentObject, active } = STATE.mode;
+    if (!currentObject || active !== 'place') return;
+
+    const tile = getTileFromMouseEvent(e);
+    if (!tile) {
+      if (DOM.placementPreview) DOM.placementPreview.style.display = 'none';
+      return;
+    }
+
+    updatePlacementPreview(tile);
+  }
+
+  /* ===========================================
+     Object Management
+  ============================================== */
+  function addObject(objData) {
+    const newObj = {
+      id: crypto.randomUUID(),
+      ...objData
+    };
+    
+    STATE.placedObjects.push(newObj);
+
+    // Update object counts
+    if (newObj.className === 'hq') {
+      STATE.objectCounts.hq++;
+    } else if (newObj.className === 'bear-trap') {
+      STATE.objectCounts['bear-trap']++;
+    }
+    
+    return newObj;
+  }
+
+  function removeObject(obj) {
+    const index = STATE.placedObjects.indexOf(obj);
+    if (index >= 0) {
+      STATE.placedObjects.splice(index, 1);
+      
+      // Update counters
+      if (obj.className === 'hq') {
+        STATE.objectCounts.hq--;
+      } else if (obj.className === 'bear-trap') {
+        STATE.objectCounts['bear-trap']--;
       }
     }
-    return;
   }
 
-  // 2) Placing new object?
-  if (currentObject) {
-    handleTileClick(e);
-    return;
-  }
-
-  // 3) Naming mode?
-  if (isNamingMode) {
-    handleNameSetting(e);
-    return;
-  }
-
-  // 4) Otherwise, check if user wants to drag an existing object
-  const tileIndex = parseInt(e.target.dataset.index);
-  const row = Math.floor(tileIndex / gridSize);
-  const col = tileIndex % gridSize;
-
-  const obj = findObjectAt(row, col);
-  if (obj) {
-    isDragging         = true;
-    draggedObject      = obj;
-    dragOriginalPos    = { row: obj.row, col: obj.col };
-
-    removeObjectFromGrid(obj); // Temporarily remove it visually
-    showDragGhost(obj);
-
-    // Prevent default to avoid text selection
-    e.preventDefault();
-  }
-}
-
-// For placing a **new** object by clicking on a tile
-function handleTileClick(e) {
-  if (!currentObject || activeMode !== 'place') return;
-
-  // Check if we already have the allowed number of each object
-  if (currentObject.className === 'hq' && hqCount >= 1) {
-    alert('Only 1 HQ allowed!');
-    return;
-  }
-  if (currentObject.className === 'bear-trap' && bearTrapCount >= 2) {
-    alert('Only 2 Bear Traps allowed!');
-    return;
-  }
-
-  const tile = getTileFromMouseEvent(e);
-  if (!tile) return;
-
-  // Center-based approach for new object
-  const size = currentObject.size;
-  const half = (size - 1) / 2; // can be 1 for 3x3, or 0.5 for 2x2, etc.
-
-  let row = tile.row - half;
-  let col = tile.col - half;
-  // Round or floor if you want only integer tile placement
-  row = Math.floor(row);
-  col = Math.floor(col);
-
-  // Clamp
-  if (row < 0) row = 0;
-  if (col < 0) col = 0;
-  if (row + size > gridSize) row = gridSize - size;
-  if (col + size > gridSize) col = gridSize - size;
-
-  // Validate
-  if (!canPlaceObject(row, col, size)) {
-    // Invalid placement - return!
-    return;
-  }
-
-  // Create the object
-  const newObj = {
-    id: crypto.randomUUID(),
-    row, col,
-    size,
-    className: currentObject.className,
-    name: ''
-  };
-  placedObjects.push(newObj);
-
-  // Adjust counters
-  if (currentObject.className === 'hq')        hqCount++;
-  if (currentObject.className === 'bear-trap') bearTrapCount++;
-
-  refreshGrid();
-}
-
-function handleMouseMove(e) {
-  if (!isDragging || !draggedObject) return;
-  if (isUpdating) return;
-
-  isUpdating = true;
-  requestAnimationFrame(() => {
-    try {
-      const tileUnderMouse = getTileFromMouseEvent(e);
-      if (!tileUnderMouse) {
-        isUpdating = false;
-        return;
+  function findObjectAt(row, col) {
+    // Search from top to bottom (last placed appears on top)
+    for (let i = STATE.placedObjects.length - 1; i >= 0; i--) {
+      const obj = STATE.placedObjects[i];
+      if (
+        row >= obj.row && row < obj.row + obj.size &&
+        col >= obj.col && col < obj.col + obj.size
+      ) {
+        return obj;
       }
-
-      // Calculate grid position based on tile size and object size
-      const tileSize = 20;
-      const size = draggedObject.size;
-      const half = (size - 1) / 2;
-
-      // Calculate new grid coordinates
-      let row = Math.floor(tileUnderMouse.row - half);
-      let col = Math.floor(tileUnderMouse.col - half);
-
-      // Clamp to grid boundaries
-      row = Math.max(0, Math.min(row, gridSize - size));
-      col = Math.max(0, Math.min(col, gridSize - size));
-
-      // Update drag ghost position in grid coordinates
-      const left = col * tileSize;
-      const top = row * tileSize;
-
-      dragGhost.style.left = `${left}px`;
-      dragGhost.style.top = `${top}px`;
-      dragGhost.style.width = `${size * tileSize}px`;
-      dragGhost.style.height = `${size * tileSize}px`;
-
-      // Clear previous highlights
-      clearRealTimeCoverage();
-
-      // Update visual cues if within bounds
-      if (row >= 0 && col >= 0 && row + size <= gridSize && col + size <= gridSize) {
-        // Highlight territory if needed
-        if (draggedObject.className === 'hq') {
-          highlightTerritory(row + 1, col + 1, 7);
-        } else if (draggedObject.className === 'banner') {
-          highlightTerritory(row, col, 3);
-        }
-
-        // Highlight object borders
-        highlightObjectBorderCenterBased(row, col, size);
-      }
-
-      // Update label position if needed
-      if (draggedObject?.name) {
-        const label = document.querySelector(`[data-object-id="${draggedObject.id}"]`);
-        if (label) {
-          // Calculate the center of the dragged object in grid coordinates
-          const centerX = col * tileSize + (size * tileSize) / 2;
-          const centerY = row * tileSize + (size * tileSize) / 2;
-
-          // Use a dummy element to account for isometric transform
-          const dummy = document.createElement('div');
-          dummy.style.position = 'absolute';
-          dummy.style.left = `${centerX}px`;
-          dummy.style.top = `${centerY}px`;
-          dummy.style.width = '1px';
-          dummy.style.height = '1px';
-
-          // Append to grid wrapper to inherit transforms
-          gridWrapper.appendChild(dummy);
-          const dummyRect = dummy.getBoundingClientRect();
-          gridWrapper.removeChild(dummy);
-
-          // Position the label relative to the grid container
-          const containerRect = document.getElementById('grid-container').getBoundingClientRect();
-          label.style.left = `${dummyRect.left - containerRect.left}px`;
-          label.style.top = `${dummyRect.top - containerRect.top}px`;
-        }
-      }
-    } catch (error) {
-      console.error('Error during mousemove update:', error);
-    } finally {
-      isUpdating = false;
     }
-  });
-}
+    return null;
+  }
 
-function handleMouseUp(e) {
-  if (!isDragging || !draggedObject) return;
-  isDragging = false;
+  function removeObjectFromGrid(obj) {
+    // Remove the object's NxN tile classes
+    for (let r = 0; r < obj.size; r++) {
+      for (let c = 0; c < obj.size; c++) {
+        const index = (obj.row + r) * CONFIG.gridSize + (obj.col + c);
+        if (index < DOM.cachedTiles.length) {
+          DOM.cachedTiles[index].classList.remove(obj.className);
+        }
+      }
+    }
+  }
 
-  // Hide ghost
-  dragGhost.style.display = 'none';
+  function placeObjectOnGrid(row, col, className, size, obj) {
+    // Loop over the object's area and add its class to each tile
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const index = (row + r) * CONFIG.gridSize + (col + c);
+        if (index < DOM.cachedTiles.length) {
+          DOM.cachedTiles[index].classList.add(className);
+          // Ensure no leftover "covered" class from previous states
+          DOM.cachedTiles[index].classList.remove('covered');
+        }
+      }
+    }
+    
+    // Optionally update the object's stored position
+    if (obj) {
+      obj.row = row;
+      obj.col = col;
+    }
+  }
 
-  const tileUnderMouse = getTileFromMouseEvent(e);
-  if (!tileUnderMouse) {
-    // Dropped outside => revert to original
+  function canPlaceObject(row, col, size) {
+    const { gridSize } = CONFIG;
+    
+    if (row < 0 || col < 0 || row + size > gridSize || col + size > gridSize) return false;
+    
+    const tiles = DOM.cachedTiles;
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const index = (row + r) * gridSize + (col + c);
+        // collision check
+        if (
+          index >= tiles.length ||
+          tiles[index].classList.contains('bear-trap') ||
+          tiles[index].classList.contains('hq') ||
+          tiles[index].classList.contains('furnace') ||
+          tiles[index].classList.contains('banner') ||
+          tiles[index].classList.contains('resource-node') ||
+          tiles[index].classList.contains('non-buildable-area')
+        ) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /* ===========================================
+     Dragging Functions
+  ============================================== */
+  function updateDragGhostPosition(e) {
+    const tileUnderMouse = getTileFromMouseEvent(e);
+    if (!tileUnderMouse) return;
+    
+    const { object: draggedObject } = STATE.dragging;
+    const { tileSize } = CONFIG;
+    const size = draggedObject.size;
+    const half = (size - 1) / 2;
+
+    // Calculate new grid coordinates
+    let row = Math.floor(tileUnderMouse.row - half);
+    let col = Math.floor(tileUnderMouse.col - half);
+
+    // Clamp to grid boundaries
+    const { gridSize } = CONFIG;
+    row = Math.max(0, Math.min(row, gridSize - size));
+    col = Math.max(0, Math.min(col, gridSize - size));
+
+    // Update drag ghost position in grid coordinates
+    const left = col * tileSize;
+    const top = row * tileSize;
+
+    DOM.dragGhost.style.left = `${left}px`;
+    DOM.dragGhost.style.top = `${top}px`;
+    DOM.dragGhost.style.width = `${size * tileSize}px`;
+    DOM.dragGhost.style.height = `${size * tileSize}px`;
+
+    // Clear previous highlights
+    clearRealTimeCoverage();
+
+    // Update visual cues if within bounds
+    if (row >= 0 && col >= 0 && row + size <= gridSize && col + size <= gridSize) {
+      // Highlight territory if needed
+      if (draggedObject.className === 'hq') {
+        highlightTerritory(row + 1, col + 1, CONFIG.coverageRadius.hq);
+      } else if (draggedObject.className === 'banner') {
+        highlightTerritory(row, col, CONFIG.coverageRadius.banner);
+      }
+
+      // Highlight object borders
+      highlightObjectBorderCenterBased(row, col, size);
+    }
+
+    // Update label position if needed
+    updateLabelForDraggedObject(draggedObject, row, col, size);
+  }
+
+  function updateLabelForDraggedObject(draggedObject, row, col, size) {
+    if (!draggedObject?.name) return;
+    
+    const label = document.querySelector(`[data-object-id="${draggedObject.id}"]`);
+    if (!label) return;
+    
+    const { tileSize } = CONFIG;
+    
+    // Calculate the center of the dragged object in grid coordinates
+    const centerX = col * tileSize + (size * tileSize) / 2;
+    const centerY = row * tileSize + (size * tileSize) / 2;
+
+    // Use a dummy element to account for isometric transform
+    const dummy = document.createElement('div');
+    dummy.style.position = 'absolute';
+    dummy.style.left = `${centerX}px`;
+    dummy.style.top = `${centerY}px`;
+    dummy.style.width = '1px';
+    dummy.style.height = '1px';
+
+    // Append to grid wrapper to inherit transforms
+    DOM.gridWrapper.appendChild(dummy);
+    const dummyRect = dummy.getBoundingClientRect();
+    DOM.gridWrapper.removeChild(dummy);
+
+    // Position the label relative to the grid container
+    const containerRect = document.getElementById('grid-container').getBoundingClientRect();
+    label.style.left = `${dummyRect.left - containerRect.left}px`;
+    label.style.top = `${dummyRect.top - containerRect.top}px`;
+  }
+
+  function showDragGhost(obj) {
+    DOM.dragGhost.innerHTML = '';
+    DOM.dragGhost.style.display = 'block';
+    
+    // Set ghost dimensions based on object size
+    const { tileSize } = CONFIG;
+    DOM.dragGhost.style.width = `${obj.size * tileSize}px`;
+    DOM.dragGhost.style.height = `${obj.size * tileSize}px`;
+    
+    // Create visual representation
+    for (let r = 0; r < obj.size; r++) {
+      const rowDiv = document.createElement('div');
+      rowDiv.style.display = 'flex';
+      for (let c = 0; c < obj.size; c++) {
+        const cell = document.createElement('div');
+        cell.style.width = `${tileSize}px`;
+        cell.style.height = `${tileSize}px`;
+        cell.style.boxSizing = 'border-box';
+        cell.style.border = '1px solid #999';
+        cell.classList.add(obj.className);
+        rowDiv.appendChild(cell);
+      }
+      DOM.dragGhost.appendChild(rowDiv);
+    }
+
+    // Match grid transformations
+    const isIso = document.getElementById('toggle-isometric').checked;
+    DOM.dragGhost.classList.toggle('isometric', isIso);
+  }
+
+  function revertDraggedObject() {
+    const { object: draggedObject, originalPos } = STATE.dragging;
+    
     placeObjectOnGrid(
-      dragOriginalPos.row, 
-      dragOriginalPos.col, 
+      originalPos.row, 
+      originalPos.col, 
       draggedObject.className, 
       draggedObject.size,
       draggedObject
     );
-    draggedObject.row = dragOriginalPos.row;
-    draggedObject.col = dragOriginalPos.col;
-    draggedObject = null;
-    return;
-  }
-
-  // Compute final row/col so that tileUnderMouse is center
-  const size = draggedObject.size;
-  const half = (size - 1) / 2;
-  let row = tileUnderMouse.row - half;
-  let col = tileUnderMouse.col - half;
-  row = Math.floor(row);
-  col = Math.floor(col);
-
-  // Clamp
-  if (row < 0) row = 0;
-  if (col < 0) col = 0;
-  if (row + size > gridSize) row = gridSize - size;
-  if (col + size > gridSize) col = gridSize - size;
-
-  if (!canPlaceObject(row, col, size)) {
-    // Invalid drop: revert object's position to original
-    draggedObject.row = dragOriginalPos.row;
-    draggedObject.col = dragOriginalPos.col;
-    // Recreate the grid state, which includes re-creating labels in their proper position
-    refreshGrid();
-    draggedObject = null;
-    return;
-  }
-
-  // Valid => place at new location
-  draggedObject.row = row;
-  draggedObject.col = col;
-  refreshGrid();
-  draggedObject = null;
-}
-
-/* --------------------------------------------------
-    Naming Mode
--------------------------------------------------- */
-function handleNameSetting(e) {
-  const tileIndex = parseInt(e.target.dataset.index);
-  const row = Math.floor(tileIndex / gridSize);
-  const col = tileIndex % gridSize;
-
-  // Find object
-  const obj = findObjectAt(row, col);
-  if (!obj) {
-    alert('No object here to name.');
-    return;
-  }
-
-  // Restrict naming to certain classes
-  const allowed = ['furnace','hq','bear-trap'];
-  if (!allowed.includes(obj.className)) {
-    alert('Naming only for HQ, Bear Traps, and Furnaces.');
-    return;
-  }
-
-  const newName = prompt(`Enter a name for this ${obj.className}:`, obj.name || '');
-  if (newName === null) return; // canceled
-
-  obj.name = newName.trim();
-  refreshGrid();
-}
-
-/* --------------------------------------------------
-    Utility / Helper Functions
--------------------------------------------------- */
-function findObjectAt(row, col) {
-  // Search from top to bottom
-  // If multiple overlap, returns last placed
-  for (let i = placedObjects.length - 1; i >= 0; i--) {
-    const obj = placedObjects[i];
-    if (
-      row >= obj.row && row < obj.row + obj.size &&
-      col >= obj.col && col < obj.col + obj.size
-    ) {
-      return obj;
-    }
-  }
-  return null;
-}
-
-function removeObjectFromGrid(obj) {
-  // Remove the object's NxN tile classes
-  for (let r = 0; r < obj.size; r++) {
-    for (let c = 0; c < obj.size; c++) {
-      const index = (obj.row + r) * gridSize + (obj.col + c);
-      cachedTiles[index].classList.remove(obj.className);
-    }
-  }
-}
-
-// Helper function to detect area overlap
-function checkOverlap(r1, c1, s1, r2, c2, s2) {
-  return !(
-    r1 + s1 <= r2 ||
-    r2 + s2 <= r1 ||
-    c1 + s1 <= c2 ||
-    c2 + s2 <= c1
-  );
-}
-
-function showDragGhost(obj) {
-  dragGhost.innerHTML = '';
-  dragGhost.style.display = 'block';
-  
-  // Set ghost dimensions based on object size
-  const tileSize = 20;
-  dragGhost.style.width = `${obj.size * tileSize}px`;
-  dragGhost.style.height = `${obj.size * tileSize}px`;
-  
-  // Create visual representation
-  for (let r = 0; r < obj.size; r++) {
-    const rowDiv = document.createElement('div');
-    rowDiv.style.display = 'flex';
-    for (let c = 0; c < obj.size; c++) {
-      const cell = document.createElement('div');
-      cell.style.width = `${tileSize}px`;
-      cell.style.height = `${tileSize}px`;
-      cell.style.boxSizing = 'border-box';
-      cell.style.border = '1px solid #999';
-      cell.classList.add(obj.className);
-      rowDiv.appendChild(cell);
-    }
-    dragGhost.appendChild(rowDiv);
-  }
-
-  // Match grid transformations
-  const isIso = document.getElementById('toggle-isometric').checked;
-  dragGhost.classList.toggle('isometric', isIso);
-}
-
-// Invert transform for isometric, then figure out which tile
-function getTileFromMouseEvent(e) {
-  const wrapperRect = gridWrapper.getBoundingClientRect();
-  const gridRect    = grid.getBoundingClientRect();
-
-  const gridWidth   = grid.offsetWidth;   // e.g. 800
-  const gridHeight  = grid.offsetHeight;  // e.g. 800
-  const gridOffsetX = (wrapperRect.width - gridWidth) / 2;
-  const gridOffsetY = (wrapperRect.height - gridHeight) / 2;
-
-  let mouseX = e.clientX - wrapperRect.left;
-  let mouseY = e.clientY - wrapperRect.top;
-
-  if (gridWrapper.classList.contains('isometric')) {
-    const style = window.getComputedStyle(gridWrapper);
-    const transform = style.transform;
-    if (transform && transform !== 'none') {
-      try {
-        const matrix        = new DOMMatrix(transform);
-        const invertedMatrix= matrix.inverse();
-        const centerX       = wrapperRect.width / 2;
-        const centerY       = wrapperRect.height / 2;
-
-        // Translate so (0,0) is center of wrapper
-        mouseX -= centerX;
-        mouseY -= centerY;
-
-        const point         = new DOMPoint(mouseX, mouseY);
-        const transformed   = point.matrixTransform(invertedMatrix);
-
-        // Re-add
-        mouseX = transformed.x + centerX;
-        mouseY = transformed.y + centerY;
-      } catch (err) {
-        console.error('Matrix inversion failed:', err);
-      }
-    }
-  }
-
-  // Adjust for the grid offset inside the wrapper
-  mouseX -= gridOffsetX;
-  mouseY -= gridOffsetY;
-
-  // Convert to tile indices
-  const tileSize = 20;
-  const col = Math.floor(mouseX / tileSize);
-  const row = Math.floor(mouseY / tileSize);
-
-  if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) {
-    return null;
-  }
-  return { row, col };
-}
-
-// Clears highlight/coverage on all tiles, then re-draw existing objects
-function clearRealTimeCoverage() {
-  cachedTiles.forEach(tile => {
-    // Remove any coverage (if applicable)
-    tile.classList.remove('covered');
-    // Remove any border classes
-    tile.classList.remove(
-      'object-border-top',
-      'object-border-right',
-      'object-border-bottom',
-      'object-border-left'
-    );
-  });
-  
-  // Re-draw borders (and coverage) for all placed objects except the one being dragged
-  placedObjects.forEach(obj => {
-    if (obj !== draggedObject) {
-      applyObjectBorder(obj.row, obj.col, obj.size);
-      if (obj.className === 'hq') {
-        highlightTerritory(obj.row + 1, obj.col + 1, 7);
-      } else if (obj.className === 'banner') {
-        highlightTerritory(obj.row, obj.col, 3);
-      }
-    }
-  });
-}
-
-// Center-based border highlight
-function highlightObjectBorderCenterBased(topLeftRow, topLeftCol, size) {
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      const index = (topLeftRow + r) * gridSize + (topLeftCol + c);
-      const tile = cachedTiles[index];
-      if (!tile) continue;
-
-      // Apply border classes to the perimeter of the object
-      if (r === 0) tile.classList.add('object-border-top');
-      if (r === size - 1) tile.classList.add('object-border-bottom');
-      if (c === 0) tile.classList.add('object-border-left');
-      if (c === size - 1) tile.classList.add('object-border-right');
-    }
-  }
-}
-
-// "can I place size×size at row,col?"
-function canPlaceObject(row, col, size) {
-  if (row + size > gridSize || col + size > gridSize) return false;
-  const tiles = cachedTiles;
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      const index = (row + r) * gridSize + (col + c);
-      // collision check
-      if (
-        index >= tiles.length ||
-        tiles[index].classList.contains('bear-trap') ||
-        tiles[index].classList.contains('hq') ||
-        tiles[index].classList.contains('furnace') ||
-        tiles[index].classList.contains('banner') ||
-        tiles[index].classList.contains('resource-node') ||
-        tiles[index].classList.contains('non-buildable-area')
-      ) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-// Coverage highlight for HQ/Banner
-function highlightTerritory(centerRow, centerCol, radius) {
-  const tiles = cachedTiles;
-  for (let r = -radius; r <= radius; r++) {
-    for (let c = -radius; c <= radius; c++) {
-      const rr = centerRow + r;
-      const cc = centerCol + c;
-      if (rr >= 0 && rr < gridSize && cc >= 0 && cc < gridSize) {
-        const index = rr * gridSize + cc;
-        // Only highlight if it's not occupied by something else
-        if (
-          !tiles[index].classList.contains('bear-trap') &&
-          !tiles[index].classList.contains('hq') &&
-          !tiles[index].classList.contains('furnace') &&
-          !tiles[index].classList.contains('banner') &&
-          !tiles[index].classList.contains('resource-node') &&
-          !tiles[index].classList.contains('non-buildable-area')
-        ) {
-          tiles[index].classList.add('covered');
-        }
-      }
-    }
-  }
-}
-
-/* --------------------------------------------------
-    Placing and Drawing
--------------------------------------------------- */
-function placeObjectOnGrid(row, col, className, size, obj) {
-  // Loop over the object's area and add its class to each tile
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      const index = (row + r) * gridSize + (col + c);
-      cachedTiles[index].classList.add(className);
-      // Ensure no leftover "covered" class from previous states.
-      cachedTiles[index].classList.remove('covered');
-    }
-  }
-  
-  // Optionally update the object's stored position
-  if (obj) {
-    obj.row = row;
-    obj.col = col;
-  }
-}
-
-// Helper: Calculate coverage area once
-function calculateCoverage(centerRow, centerCol, radius) {
-  const area = [];
-  for (let r = -radius; r <= radius; r++) {
-    for (let c = -radius; c <= radius; c++) {
-      const rr = centerRow + r;
-      const cc = centerCol + c;
-      if (rr >= 0 && rr < gridSize && cc >= 0 && cc < gridSize) {
-        area.push({ r: rr, c: cc });
-      }
-    }
-  }
-  return area;
-}
-
-// Helper: Update visuals for specific area
-function updateCoverageVisuals(area) {
-  area.forEach(({r, c}) => {
-    const index = r * gridSize + c;
-    const tile = cachedTiles[index];
-    const covered = coverageMap[r][c].hq || coverageMap[r][c].banner;
     
-    if (covered && !tile.classList.contains('covered')) {
-      tile.classList.add('covered');
-    } else if (!covered && tile.classList.contains('covered')) {
-      tile.classList.remove('covered');
+    draggedObject.row = originalPos.row;
+    draggedObject.col = originalPos.col;
+    STATE.dragging.object = null;
+  }
+
+  function finalizeDrag(tileUnderMouse) {
+    const { object: draggedObject } = STATE.dragging;
+    const size = draggedObject.size;
+    const half = (size - 1) / 2;
+    
+    // Compute final row/col so that tileUnderMouse is center
+    let row = Math.floor(tileUnderMouse.row - half);
+    let col = Math.floor(tileUnderMouse.col - half);
+
+    // Clamp to boundaries
+    const { gridSize } = CONFIG;
+    row = Math.max(0, Math.min(row, gridSize - size));
+    col = Math.max(0, Math.min(col, gridSize - size));
+
+    if (!canPlaceObject(row, col, size)) {
+      // Invalid drop: revert to original position
+      draggedObject.row = STATE.dragging.originalPos.row;
+      draggedObject.col = STATE.dragging.originalPos.col;
+      refreshGrid();
+      STATE.dragging.object = null;
+      return;
     }
-  });
-}
 
-function applyObjectBorder(row, col, size) {
-  // Basic black outline on the NxN perimeter
-  const tiles = cachedTiles;
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      const index = (row + r) * gridSize + (col + c);
-      const tile = tiles[index];
-      if (r === 0)         tile.classList.add('object-border-top');
-      if (r === size - 1)  tile.classList.add('object-border-bottom');
-      if (c === 0)         tile.classList.add('object-border-left');
-      if (c === size - 1)  tile.classList.add('object-border-right');
-    }
-  }
-}
-
-/* --------------------------------------------------
-    Label Positioning
--------------------------------------------------- */
-function refreshLabelPositions() {
-  const labelsOverlay = document.getElementById('labels-overlay');
-  const labels = labelsOverlay.querySelectorAll('.name-label');
-  const containerRect = document.getElementById('grid-container').getBoundingClientRect();
-
-  labels.forEach(label => {
-    const objId = label.dataset.objectId;
-    const obj   = placedObjects.find(o => o.id === objId);
-    if (!obj) return;
-
-    // Compute center in grid coords
-    const baseX = obj.col * 20 + (obj.size * 20)/2;
-    const baseY = obj.row * 20 + (obj.size * 20)/2;
-
-    // Insert a "dummy" element to measure transform offset
-    const measurer = document.createElement('div');
-    measurer.style.position = 'absolute';
-    measurer.style.left = `${baseX}px`;
-    measurer.style.top  = `${baseY}px`;
-    measurer.style.width = '1px';
-    measurer.style.height= '1px';
-
-    gridWrapper.appendChild(measurer);
-    const rect = measurer.getBoundingClientRect();
-    gridWrapper.removeChild(measurer);
-
-    label.style.left = `${rect.left - containerRect.left}px`;
-    label.style.top  = `${rect.top  - containerRect.top}px`;
-  });
-}
-
-/* --------------------------------------------------
-    Delete Highlight
--------------------------------------------------- */
-function createDeleteHighlight() {
-  deleteHighlightElement = document.createElement('div');
-  deleteHighlightElement.classList.add('delete-highlight');
-  deleteHighlightElement.style.cssText = 'width: 0; height: 0; border: none;';
-  grid.appendChild(deleteHighlightElement);
-}
-function updateDeleteHighlight(obj) {
-  if (!deleteHighlightElement) createDeleteHighlight();
-  const sizePx = obj.size * 20;
-  deleteHighlightElement.style.cssText = `
-    width: ${sizePx}px;
-    height: ${sizePx}px;
-    left: ${obj.col * 20}px;
-    top:  ${obj.row * 20}px;
-    border: 2px solid red;
-  `;
-}
-function clearDeleteHighlight() {
-  if (deleteHighlightElement) {
-    deleteHighlightElement.style.cssText = 'width: 0; height: 0; border: none;';
-  }
-}
-
-/* --------------------------------------------------
-    Misc / Utility
--------------------------------------------------- */
-function clearGrid() {
-  const tiles = cachedTiles;
-  tiles.forEach(t => {
-    t.className = 'tile'; // reset
-    t.dataset.name = '';
-  });
-  placedObjects = [];
-  hqCount = 0;
-  bearTrapCount = 0;
-
-  // Remove labels
-  const labelsOverlay = document.getElementById('labels-overlay');
-  while (labelsOverlay.firstChild) {
-    labelsOverlay.removeChild(labelsOverlay.firstChild);
+    // Valid drop: update position
+    draggedObject.row = row;
+    draggedObject.col = col;
+    refreshGrid();
+    updateStatsDisplay();
+    STATE.dragging.object = null;
   }
 
-  currentObject = null;
-}
+  /* ===========================================
+     Coverage & Visualization
+  ============================================== */
+  function refreshGrid() {
+    // 1. Clear the grid visual state
+    clearGridVisualOnly();
 
-function clearGridVisualOnly() {
-  // Wipes the tile classes but not the placedObjects array
-  const tiles = cachedTiles;
-  tiles.forEach(t => {
-    t.className = 'tile';
-    t.dataset.name = '';
-    t.style.border = '';
-    t.textContent = '';
-  });
-  // Remove all name labels
-  const labelsOverlay = document.getElementById('labels-overlay');
-  while (labelsOverlay.firstChild) {
-    labelsOverlay.removeChild(labelsOverlay.firstChild);
+    // 2. Place the "base" object tiles for each object
+    STATE.placedObjects.forEach(obj => {
+      placeObjectOnGrid(obj.row, obj.col, obj.className, obj.size, obj);
+
+      // Apply furnace colors based on row
+      if (obj.className === 'furnace') {
+        applyFurnaceColors(obj);
+      }
+    });
+
+    // 3. Reset the coverage map
+    initCoverageMap();
+
+    // 4. Compute coverage for each HQ/Banner
+    updateCoverageMap();
+
+    // 5. Apply the "covered" class to tiles
+    applyVisualCoverage();
+
+    // 6. Apply borders for every object
+    STATE.placedObjects.forEach(obj => {
+      applyObjectBorder(obj.row, obj.col, obj.size);
+    });
+
+    // 7. Re-create labels for objects that have names
+    createObjectLabels();
+
+    // 8. Position the labels
+    refreshLabelPositions();
   }
-}
 
-function deactivateAllModes() {
-  document.querySelectorAll('.active').forEach(btn => btn.classList.remove('active'));
+  function applyFurnaceColors(furnace) {
+    const proximity = getFurnaceProximityToTraps(furnace);
+    const color = CONFIG.furnaceColors[proximity] || CONFIG.furnaceColors.other;
 
-  activeMode = null;
-  currentPlacementType = null;
-  currentObject = null;
-  isDeleteMode = false;
-  isNamingMode = false;
+    // Check if the furnace is uncovered
+    const isUncovered = !isFurnaceCovered(furnace);
 
-  grid.classList.remove('delete-mode-active');
+    // Apply the color and highlight to each tile of the furnace
+    for (let r = 0; r < furnace.size; r++) {
+      for (let c = 0; c < furnace.size; c++) {
+        const index = (furnace.row + r) * CONFIG.gridSize + (furnace.col + c);
+        const tile = DOM.cachedTiles[index];
+        if (tile) {
+          tile.style.backgroundColor = color;
 
-  if (placementPreview) {
-    placementPreview.style.display = 'none';
-  }
-}
-
-function activatePlacementMode(type) {
-  const sizeMap = {
-    'bear-trap': 3,
-    'hq': 3,
-    'furnace': 2,
-    'banner': 1,
-    'resource-node': 2,
-    'non-buildable-area': 1
-  };
-
-  activeMode = 'place';
-  currentPlacementType = type;
-  currentObject = {
-    className: type,
-    size: sizeMap[type]
-  };
-  document.getElementById(`add-${type}`).classList.add('active');
-}
-
-function activateDeleteMode() {
-  activeMode = 'delete';
-  isDeleteMode = true;
-  grid.classList.add('delete-mode-active');
-  document.getElementById('delete-mode').classList.add('active');
-}
-
-function activateNamingMode() {
-  activeMode = 'name';
-  isNamingMode = true;
-  document.getElementById('set-name').classList.add('active');
-}
-
-function recalcCounters() {
-  hqCount = 0;
-  bearTrapCount = 0;
-  placedObjects.forEach(o => {
-    if (o.className === 'hq')        hqCount++;
-    if (o.className === 'bear-trap') bearTrapCount++;
-  });
-}
-
-// Saving / Loading
-function saveLayout() {
-  const layoutJSON = JSON.stringify(placedObjects);
-  const blob = new Blob([layoutJSON], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'layout.json';
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function showLoading() {
-  document.getElementById('loading-overlay').style.display = 'flex';
-}
-
-function hideLoading() {
-  document.getElementById('loading-overlay').style.display = 'none';
-}
-
-function loadLayout(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  
-  showLoading();
-  
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const data = JSON.parse(e.target.result);
-      placedObjects = data.map(o => ({
-        ...o,
-        id: o.id || crypto.randomUUID()
-      }));
-      recalcCounters();
-      clearGridVisualOnly();
-      
-      // Process placement in chunks to avoid long blocking loops.
-      const chunkSize = 50;
-      let index = 0;
-      function processChunk() {
-        const end = Math.min(index + chunkSize, placedObjects.length);
-        for (; index < end; index++) {
-          const obj = placedObjects[index];
-          placeObjectOnGrid(obj.row, obj.col, obj.className, obj.size, obj);
-        }
-        if (index < placedObjects.length) {
-          requestAnimationFrame(processChunk);
-        } else {
-          // Final pass: refresh the grid to compute coverage, borders, and label positions in one go.
-          refreshGrid();
-          hideLoading();
+          // Add a red border for uncovered furnaces
+          if (isUncovered) {
+            tile.style.border = '2px solid red';
+          }
         }
       }
-      processChunk();
-    } catch (err) {
-      console.error('Error parsing JSON:', err);
-      alert('Failed to load layout. Invalid JSON?');
-      hideLoading();
     }
-  };
-  reader.readAsText(file);
-}
-
-// Placement preview for brand new objects
-function handlePlacementPreview(e) {
-  if (!currentObject || activeMode !== 'place') return;
-
-  const tile = getTileFromMouseEvent(e);
-  if (!tile) {
-    if (placementPreview) placementPreview.style.display = 'none';
-    return;
   }
 
-  const tileSize = 20;
-  const size = currentObject.size;
-  const half = (size - 1) / 2;
-
-  let row = tile.row - half;
-  let col = tile.col - half;
-  row = Math.floor(row);
-  col = Math.floor(col);
-
-  // Clamp
-  if (row < 0) row = 0;
-  if (col < 0) col = 0;
-  if (row + size > gridSize) row = gridSize - size;
-  if (col + size > gridSize) col = gridSize - size;
-
-  // Create preview if needed
-  if (!placementPreview) {
-    placementPreview = document.createElement('div');
-    placementPreview.className = 'placement-preview';
-    grid.appendChild(placementPreview);
+  function updateCoverageMap() {
+    STATE.placedObjects.forEach(obj => {
+      if (obj.className === 'hq') {
+        const coverageArea = calculateCoverage(
+          obj.row + 1, obj.col + 1, CONFIG.coverageRadius.hq
+        );
+        coverageArea.forEach(({ r, c }) => {
+          if (r >= 0 && r < CONFIG.gridSize && c >= 0 && c < CONFIG.gridSize) {
+            STATE.coverageMap[r][c].hq = true;
+          }
+        });
+      } else if (obj.className === 'banner') {
+        const coverageArea = calculateCoverage(
+          obj.row, obj.col, CONFIG.coverageRadius.banner
+        );
+        coverageArea.forEach(({ r, c }) => {
+          if (r >= 0 && r < CONFIG.gridSize && c >= 0 && c < CONFIG.gridSize) {
+            STATE.coverageMap[r][c].banner = true;
+          }
+        });
+      }
+    });
   }
 
-  // Check collision
-  isValidPlacement = canPlaceObject(row, col, size);
-  placementPreview.classList.toggle('invalid', !isValidPlacement);
+  function applyVisualCoverage() {
+    const { gridSize } = CONFIG;
+    
+    for (let r = 0; r < gridSize; r++) {
+      for (let c = 0; c < gridSize; c++) {
+        const index = r * gridSize + c;
+        const tile = DOM.cachedTiles[index];
+        
+        // Only add "covered" if the tile is in coverage and not occupied
+        if ((STATE.coverageMap[r][c].hq || STATE.coverageMap[r][c].banner) &&
+            !tile.classList.contains('hq') &&
+            !tile.classList.contains('bear-trap') &&
+            !tile.classList.contains('furnace') &&
+            !tile.classList.contains('banner') &&
+            !tile.classList.contains('resource-node') &&
+            !tile.classList.contains('non-buildable-area')) {
+          tile.classList.add('covered');
+        }
+      }
+    }
+  }
 
-  // Position
-  const sizePx = size * tileSize;
-  placementPreview.style.display = 'block';
-  placementPreview.style.width  = `${sizePx}px`;
-  placementPreview.style.height = `${sizePx}px`;
-  placementPreview.style.left   = `${col * tileSize}px`;
-  placementPreview.style.top    = `${row * tileSize}px`;
+  function calculateCoverage(centerRow, centerCol, radius) {
+    const area = [];
+    for (let r = -radius; r <= radius; r++) {
+      for (let c = -radius; c <= radius; c++) {
+        const rr = centerRow + r;
+        const cc = centerCol + c;
+        if (rr >= 0 && rr < CONFIG.gridSize && cc >= 0 && cc < CONFIG.gridSize) {
+          area.push({ r: rr, c: cc });
+        }
+      }
+    }
+    return area;
+  }
 
-  // Isometric check
-  const isIso = document.getElementById('toggle-isometric').checked;
-  placementPreview.classList.toggle('isometric', isIso);
-}
+  function clearGridVisualOnly() {
+    DOM.cachedTiles.forEach(tile => {
+      tile.className = 'tile';
+      tile.style.backgroundColor = '';
+      tile.style.border = '';
+      tile.dataset.name = '';
+      tile.textContent = '';
+    });
 
-/* --------------------------------------------------
-    Event Listeners
--------------------------------------------------- */
-// Toolbar & bottom bar
-document.querySelectorAll('#toolbar button, #toolbar-bottom button')
-  .forEach(btn => {
-    btn.addEventListener('click', function() {
-      const isSameButton = this.classList.contains('active');
-      deactivateAllModes();
-      if (!isSameButton) {
-        switch(this.id) {
-          case 'delete-mode':   activateDeleteMode(); break;
-          case 'set-name':      activateNamingMode();  break;
-          case 'clear-grid':    clearGrid();           break;
-          case 'save-layout':   saveLayout();          break;
-          case 'restore-layout':document.getElementById('load-layout').click(); break;
-          default:
-            if (this.id.startsWith('add-')) {
-              activatePlacementMode(this.id.replace('add-', ''));
-            }
+    // Clear labels
+    DOM.labelsOverlay.innerHTML = '';
+  }
+
+  function clearRealTimeCoverage() {
+    DOM.cachedTiles.forEach(tile => {
+      // Remove any coverage
+      tile.classList.remove('covered');
+      // Remove any border classes
+      tile.classList.remove(
+        'object-border-top',
+        'object-border-right',
+        'object-border-bottom',
+        'object-border-left'
+      );
+    });
+    
+    // Re-draw borders and coverage for non-dragged objects
+    STATE.placedObjects.forEach(obj => {
+      if (obj !== STATE.dragging.object) {
+        applyObjectBorder(obj.row, obj.col, obj.size);
+        if (obj.className === 'hq') {
+          highlightTerritory(obj.row + 1, obj.col + 1, CONFIG.coverageRadius.hq);
+        } else if (obj.className === 'banner') {
+          highlightTerritory(obj.row, obj.col, CONFIG.coverageRadius.banner);
         }
       }
     });
-  });
-
-// File input for loading layout
-document.getElementById('load-layout').addEventListener('change', loadLayout);
-
-// Mousemove for new-object placement preview
-grid.addEventListener('mousemove', handlePlacementPreview);
-grid.addEventListener('mouseleave', () => {
-  if (placementPreview) placementPreview.style.display = 'none';
-});
-
-// Mousemove for delete highlight
-grid.addEventListener('mousemove', e => {
-  if (!isDeleteMode) return;
-  const tile = getTileFromMouseEvent(e);
-  if (!tile) {
-    clearDeleteHighlight();
-    return;
   }
-  const obj = findObjectAt(tile.row, tile.col);
-  if (obj && obj !== lastHoveredObject) {
-    updateDeleteHighlight(obj);
-    lastHoveredObject = obj;
-  } else if (!obj) {
-    clearDeleteHighlight();
-    lastHoveredObject = null;
-  }
-});
 
-// Toggle name labels
-document.getElementById('toggle-names').addEventListener('change', e => {
-  showNames = e.target.checked;
-  const overlay = document.getElementById('labels-overlay');
-  if (showNames) overlay.classList.add('show-names');
-  else           overlay.classList.remove('show-names');
-  refreshGrid();
-});
-document.getElementById('labels-overlay').classList.add('show-names');
-
-// Toggle isometric
-const isometricCheckbox = document.getElementById('toggle-isometric');
-isometricCheckbox.addEventListener('change', e => {
-  const isIso = e.target.checked;
-
-  gridWrapper.classList.toggle('isometric', isIso);
-  dragGhost.classList.toggle('isometric', isIso);
-
-  const bottomBar = document.getElementById('toolbar-bottom');
-  bottomBar.classList.toggle('isometric', isIso);
-
-  if (placementPreview) {
-    placementPreview.classList.toggle('isometric', isIso);
-  }
-  // Reposition labels smoothly
-  animateLabelPositions(500);
-});
-
-function animateLabelPositions(duration) {
-  const start = performance.now();
-  function tick(now) {
-    refreshLabelPositions();
-    if (now - start < duration) {
-      requestAnimationFrame(tick);
+  function highlightTerritory(centerRow, centerCol, radius) {
+    const tiles = DOM.cachedTiles;
+    const { gridSize } = CONFIG;
+    
+    for (let r = -radius; r <= radius; r++) {
+      for (let c = -radius; c <= radius; c++) {
+        const rr = centerRow + r;
+        const cc = centerCol + c;
+        if (rr >= 0 && rr < gridSize && cc >= 0 && cc < gridSize) {
+          const index = rr * gridSize + cc;
+          // Only highlight if not occupied by something else
+          if (
+            !tiles[index].classList.contains('bear-trap') &&
+            !tiles[index].classList.contains('hq') &&
+            !tiles[index].classList.contains('furnace') &&
+            !tiles[index].classList.contains('banner') &&
+            !tiles[index].classList.contains('resource-node') &&
+            !tiles[index].classList.contains('non-buildable-area')
+          ) {
+            tiles[index].classList.add('covered');
+          }
+        }
+      }
     }
   }
-  requestAnimationFrame(tick);
-}
 
-// Init delete highlight
-createDeleteHighlight();
+  function applyObjectBorder(row, col, size) {
+    // Basic black outline on the NxN perimeter
+    const tiles = DOM.cachedTiles;
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const index = (row + r) * CONFIG.gridSize + (col + c);
+        if (index < tiles.length) {
+          const tile = tiles[index];
+          if (r === 0)         tile.classList.add('object-border-top');
+          if (r === size - 1)  tile.classList.add('object-border-bottom');
+          if (c === 0)         tile.classList.add('object-border-left');
+          if (c === size - 1)  tile.classList.add('object-border-right');
+        }
+      }
+    }
+  }
 
-// Initialize grid on page load
-createGrid();
+  function highlightObjectBorderCenterBased(topLeftRow, topLeftCol, size) {
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const index = (topLeftRow + r) * CONFIG.gridSize + (topLeftCol + c);
+        const tile = DOM.cachedTiles[index];
+        if (!tile) continue;
+
+        // Apply border classes to the perimeter
+        if (r === 0) tile.classList.add('object-border-top');
+        if (r === size - 1) tile.classList.add('object-border-bottom');
+        if (c === 0) tile.classList.add('object-border-left');
+        if (c === size - 1) tile.classList.add('object-border-right');
+      }
+    }
+  }
+
+  function createObjectLabels() {
+    STATE.placedObjects.forEach(obj => {
+      if (obj.name) {
+        const labelDiv = document.createElement('div');
+        labelDiv.classList.add('name-label');
+        labelDiv.textContent = obj.name;
+        labelDiv.dataset.objectId = obj.id;
+        DOM.labelsOverlay.appendChild(labelDiv);
+      }
+    });
+  }
+
+  function refreshLabelPositions() {
+    const labels = DOM.labelsOverlay.querySelectorAll('.name-label');
+    const containerRect = document.getElementById('grid-container').getBoundingClientRect();
+
+    labels.forEach(label => {
+      const objId = label.dataset.objectId;
+      const obj = STATE.placedObjects.find(o => o.id === objId);
+      if (!obj) return;
+
+      // Compute center in grid coords
+      const { tileSize } = CONFIG;
+      const baseX = obj.col * tileSize + (obj.size * tileSize) / 2;
+      const baseY = obj.row * tileSize + (obj.size * tileSize) / 2;
+
+      // Insert a "dummy" element to measure transform offset
+      const measurer = document.createElement('div');
+      measurer.style.position = 'absolute';
+      measurer.style.left = `${baseX}px`;
+      measurer.style.top = `${baseY}px`;
+      measurer.style.width = '1px';
+      measurer.style.height = '1px';
+
+      DOM.gridWrapper.appendChild(measurer);
+      const rect = measurer.getBoundingClientRect();
+      DOM.gridWrapper.removeChild(measurer);
+
+      label.style.left = `${rect.left - containerRect.left}px`;
+      label.style.top = `${rect.top - containerRect.top}px`;
+    });
+  }
+
+  function animateLabelPositions(duration) {
+    const start = performance.now();
+    
+    function tick(now) {
+      refreshLabelPositions();
+      if (now - start < duration) {
+        requestAnimationFrame(tick);
+      }
+    }
+    
+    requestAnimationFrame(tick);
+  }
+
+  /* ===========================================
+     Delete Mode Functions
+  ============================================== */
+  function createDeleteHighlight() {
+    DOM.deleteHighlight = document.createElement('div');
+    DOM.deleteHighlight.classList.add('delete-highlight');
+    DOM.deleteHighlight.style.cssText = 'width: 0; height: 0; border: none;';
+    DOM.grid.appendChild(DOM.deleteHighlight);
+  }
+
+  function updateDeleteHighlight(obj) {
+    if (!DOM.deleteHighlight) createDeleteHighlight();
+    
+    const { tileSize } = CONFIG;
+    const sizePx = obj.size * tileSize;
+    
+    DOM.deleteHighlight.style.cssText = `
+      width: ${sizePx}px;
+      height: ${sizePx}px;
+      left: ${obj.col * tileSize}px;
+      top: ${obj.row * tileSize}px;
+      border: 2px solid red;
+    `;
+  }
+
+  function clearDeleteHighlight() {
+    if (DOM.deleteHighlight) {
+      DOM.deleteHighlight.style.cssText = 'width: 0; height: 0; border: none;';
+    }
+  }
+
+  /* ===========================================
+     Placement Preview
+  ============================================== */
+  function updatePlacementPreview(tile) {
+    const { tileSize } = CONFIG;
+    const { currentObject } = STATE.mode;
+    const size = currentObject.size;
+    const half = (size - 1) / 2;
+
+    // Calculate grid position
+    let row = Math.floor(tile.row - half);
+    let col = Math.floor(tile.col - half);
+
+    // Clamp to boundaries
+    const { gridSize } = CONFIG;
+    row = Math.max(0, Math.min(row, gridSize - size));
+    col = Math.max(0, Math.min(col, gridSize - size));
+
+    // Create preview if needed
+    if (!DOM.placementPreview) {
+      DOM.placementPreview = document.createElement('div');
+      DOM.placementPreview.className = 'placement-preview';
+      DOM.grid.appendChild(DOM.placementPreview);
+    }
+
+    // Check if placement is valid
+    const isValidPlacement = canPlaceObject(row, col, size);
+    DOM.placementPreview.classList.toggle('invalid', !isValidPlacement);
+
+    // Position the preview
+    const sizePx = size * tileSize;
+    DOM.placementPreview.style.display = 'block';
+    DOM.placementPreview.style.width = `${sizePx}px`;
+    DOM.placementPreview.style.height = `${sizePx}px`;
+    DOM.placementPreview.style.left = `${col * tileSize}px`;
+    DOM.placementPreview.style.top = `${row * tileSize}px`;
+
+    // Apply isometric transform if needed
+    const isIso = document.getElementById('toggle-isometric').checked;
+    DOM.placementPreview.classList.toggle('isometric', isIso);
+  }
+  
+  /* ===========================================
+     Statistics Functions
+  ============================================== */
+  function calculateStats() {
+    const stats = {
+      banners: 0,
+      furnaces: 0,
+      uncoveredFurnaces: 0,
+      firstRowFurnaces: 0,
+      secondRowFurnaces: 0,
+      thirdRowFurnaces: 0,
+    };
+
+    // Count objects and calculate metrics
+    STATE.placedObjects.forEach(obj => {
+      if (obj.className === 'banner') {
+        stats.banners++;
+      } else if (obj.className === 'furnace') {
+        stats.furnaces++;
+
+        // Check if furnace is uncovered
+        if (!isFurnaceCovered(obj)) {
+          stats.uncoveredFurnaces++;
+        }
+
+        // Check furnace proximity to bear traps
+        const proximity = getFurnaceProximityToTraps(obj);
+        if (proximity === 1) stats.firstRowFurnaces++;
+        else if (proximity === 2) stats.secondRowFurnaces++;
+        else if (proximity === 3) stats.thirdRowFurnaces++;
+      }
+    });
+
+    return stats;
+  }
+
+  function isFurnaceCovered(furnace) {
+    const { row, col, size } = furnace;
+    let coveredTiles = 0;
+
+    // Check each tile under the furnace
+    for (let r = row; r < row + size; r++) {
+      for (let c = col; c < col + size; c++) {
+        if (STATE.coverageMap[r]?.[c]?.hq || STATE.coverageMap[r]?.[c]?.banner) {
+          coveredTiles++;
+        }
+      }
+    }
+
+    // At least 75% of tiles must be covered
+    const totalTiles = size * size;
+    return coveredTiles >= totalTiles * 0.75;
+  }
+
+  function getFurnaceProximityToTraps(furnace) {
+    const bearTraps = STATE.placedObjects.filter(obj => obj.className === 'bear-trap');
+    let minProximity = Infinity;
+
+    bearTraps.forEach(trap => {
+      // Define edges for the bear trap (3x3)
+      const trapLeft = trap.col;
+      const trapRight = trap.col + 2;
+      const trapTop = trap.row;
+      const trapBottom = trap.row + 2;
+
+      // Define edges for the furnace (2x2)
+      const furnaceLeft = furnace.col;
+      const furnaceRight = furnace.col + 1;
+      const furnaceTop = furnace.row;
+      const furnaceBottom = furnace.row + 1;
+
+      // Calculate horizontal and vertical distances
+      const horizontalDistance = Math.max(
+        trapLeft - furnaceRight,
+        furnaceLeft - trapRight
+      );
+      const verticalDistance = Math.max(
+        trapTop - furnaceBottom,
+        furnaceTop - trapBottom
+      );
+
+      // Minimum distance is the maximum of horizontal/vertical distances
+      const distance = Math.max(horizontalDistance, verticalDistance);
+
+      // Negative distance means the objects overlap or touch
+      const effectiveDistance = Math.max(0, distance);
+
+      // Track the smallest distance to any trap
+      if (effectiveDistance < minProximity) {
+        minProximity = effectiveDistance;
+      }
+    });
+
+    // Determine proximity based on edge-to-edge distance
+    if (minProximity <= 2) return 1; // first row
+    if (minProximity <= 4) return 2; // second row
+    if (minProximity <= 6) return 3; // third row
+    return 0; // Not in any row
+  }
+
+  function updateStatsDisplay() {
+    const stats = calculateStats();
+
+    document.getElementById('banner-count').textContent = stats.banners;
+    document.getElementById('furnace-count').textContent = stats.furnaces;
+    document.getElementById('uncovered-furnace-count').textContent = stats.uncoveredFurnaces;
+    document.getElementById('first-row-furnace-count').textContent = stats.firstRowFurnaces;
+    document.getElementById('second-row-furnace-count').textContent = stats.secondRowFurnaces;
+    document.getElementById('third-row-furnace-count').textContent = stats.thirdRowFurnaces;
+  }
+  
+  /* ===========================================
+     Mode & UI Functions
+  ============================================== */
+  function activatePlacementMode(type) {
+    const typeConfig = CONFIG.objectTypes[type];
+    if (!typeConfig) return;
+    
+    STATE.mode.active = 'place';
+    STATE.mode.currentType = type;
+    STATE.mode.currentObject = {
+      className: type,
+      size: typeConfig.size
+    };
+    
+    document.getElementById(`add-${type}`).classList.add('active');
+  }
+
+  function activateDeleteMode() {
+    STATE.mode.active = 'delete';
+    DOM.grid.classList.add('delete-mode-active');
+    document.getElementById('delete-mode').classList.add('active');
+  }
+
+  function activateNamingMode() {
+    STATE.mode.active = 'name';
+    document.getElementById('set-name').classList.add('active');
+  }
+
+  function deactivateAllModes() {
+    // Remove active class from all buttons
+    document.querySelectorAll('.active').forEach(btn => btn.classList.remove('active'));
+
+    // Reset mode state
+    STATE.mode.active = null;
+    STATE.mode.currentType = null;
+    STATE.mode.currentObject = null;
+    
+    // Remove grid classes
+    DOM.grid.classList.remove('delete-mode-active');
+
+    // Hide placement preview
+    if (DOM.placementPreview) {
+      DOM.placementPreview.style.display = 'none';
+    }
+  }
+
+  /* ===========================================
+     Save & Load Functions
+  ============================================== */
+  function saveLayout() {
+    const layoutJSON = JSON.stringify(STATE.placedObjects);
+    const blob = new Blob([layoutJSON], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'layout.json';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function loadLayout(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    showLoading();
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const data = JSON.parse(e.target.result);
+        STATE.placedObjects = data.map(o => ({
+          ...o,
+          id: o.id || crypto.randomUUID()
+        }));
+        
+        // Update object counters
+        recalculateObjectCounts();
+        
+        // Clear grid first
+        clearGridVisualOnly();
+        
+        // Process placement in chunks to avoid UI freezing
+        processObjectsInChunks()
+          .then(() => {
+            // Final pass: refresh the grid
+            refreshGrid();
+            updateStatsDisplay();
+            hideLoading();
+          });
+      } catch (err) {
+        console.error('Error parsing JSON:', err);
+        alert('Failed to load layout. Invalid JSON?');
+        hideLoading();
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function processObjectsInChunks() {
+    const chunkSize = 50;
+    let index = 0;
+    
+    return new Promise(resolve => {
+      function processChunk() {
+        const end = Math.min(index + chunkSize, STATE.placedObjects.length);
+        for (; index < end; index++) {
+          const obj = STATE.placedObjects[index];
+          placeObjectOnGrid(obj.row, obj.col, obj.className, obj.size, obj);
+        }
+        if (index < STATE.placedObjects.length) {
+          requestAnimationFrame(processChunk);
+        } else {
+          resolve();
+        }
+      }
+      requestAnimationFrame(processChunk);
+    });
+  }
+
+  function recalculateObjectCounts() {
+    // Reset counters
+    STATE.objectCounts = {
+      'bear-trap': 0,
+      'hq': 0
+    };
+    
+    // Count objects
+    STATE.placedObjects.forEach(o => {
+      if (o.className === 'hq') {
+        STATE.objectCounts.hq++;
+      } else if (o.className === 'bear-trap') {
+        STATE.objectCounts['bear-trap']++;
+      }
+    });
+  }
+
+  function showLoading() {
+    DOM.loadingOverlay.style.display = 'flex';
+  }
+
+  function hideLoading() {
+    DOM.loadingOverlay.style.display = 'none';
+  }
+
+  /* ===========================================
+     Grid Utility Functions
+  ============================================== */
+  function getTileFromMouseEvent(e) {
+    const wrapperRect = DOM.gridWrapper.getBoundingClientRect();
+    const gridRect = DOM.grid.getBoundingClientRect();
+
+    const gridWidth = DOM.grid.offsetWidth;
+    const gridHeight = DOM.grid.offsetHeight;
+    const gridOffsetX = (wrapperRect.width - gridWidth) / 2;
+    const gridOffsetY = (wrapperRect.height - gridHeight) / 2;
+
+    let mouseX = e.clientX - wrapperRect.left;
+    let mouseY = e.clientY - wrapperRect.top;
+
+    // Handle isometric view
+    if (DOM.gridWrapper.classList.contains('isometric')) {
+      const style = window.getComputedStyle(DOM.gridWrapper);
+      const transform = style.transform;
+      if (transform && transform !== 'none') {
+        try {
+          const matrix = new DOMMatrix(transform);
+          const invertedMatrix = matrix.inverse();
+          const centerX = wrapperRect.width / 2;
+          const centerY = wrapperRect.height / 2;
+
+          // Translate so (0,0) is center of wrapper
+          mouseX -= centerX;
+          mouseY -= centerY;
+
+          const point = new DOMPoint(mouseX, mouseY);
+          const transformed = point.matrixTransform(invertedMatrix);
+
+          // Re-add
+          mouseX = transformed.x + centerX;
+          mouseY = transformed.y + centerY;
+        } catch (err) {
+          console.error('Matrix inversion failed:', err);
+        }
+      }
+    }
+
+    // Adjust for grid offset inside wrapper
+    mouseX -= gridOffsetX;
+    mouseY -= gridOffsetY;
+
+    // Convert to tile indices
+    const { tileSize, gridSize } = CONFIG;
+    const col = Math.floor(mouseX / tileSize);
+    const row = Math.floor(mouseY / tileSize);
+
+    if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) {
+      return null;
+    }
+    
+    return { row, col };
+  }
+
+  function clearGrid() {
+    // Reset all tiles
+    DOM.cachedTiles.forEach(t => {
+      t.className = 'tile';
+      t.style = '';
+      t.dataset.name = '';
+    });
+    
+    // Clear objects array
+    STATE.placedObjects = [];
+    
+    // Reset counts
+    STATE.objectCounts = {
+      'bear-trap': 0,
+      'hq': 0
+    };
+
+    // Clear labels
+    DOM.labelsOverlay.innerHTML = '';
+
+    // Reset current object
+    STATE.mode.currentObject = null;
+    
+    // Update stats
+    updateStatsDisplay();
+  }
+
+  /* ===========================================
+     Initialize the application
+  ============================================== */
+  init();
+
+})();

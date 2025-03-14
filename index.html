@@ -13,7 +13,7 @@
     }
 
     #toolbar, #toolbar-bottom {
-      margin: 20px 0;
+      margin: 8px 0;
     }
     #toolbar-bottom.isometric {
       margin-top: 80px;
@@ -58,7 +58,7 @@
       margin: 25px;
     }
     #grid-wrapper.isometric .name-label {
-      /* Counteract the isometric transform for labels */
+      /* Counteract the isometric transform for labels to keep them readable*/
       transform: translate(-50%, -50%) skew(15deg, 15deg) rotate(-45deg);
     }
 
@@ -77,7 +77,7 @@
     }
     .bear-trap    { background-color: red; }
     .hq           { background-color: steelblue; }
-    .furnace      { background-color: yellowgreen; }
+    .furnace      { background-color: transparent; }
     .banner       { background-color: darkblue; }
     .non-buildable-area { background-color: black; }
     .resource-node{ background-color: brown; }
@@ -93,7 +93,16 @@
     .object-border-bottom { border-bottom: 2px solid black !important; }
     .object-border-left   { border-left:   2px solid black !important; }
 
-    /* Delete Mode styling */
+    .color-block {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      margin-left: 5px;
+      border: 1px solid #ccc;
+      vertical-align: middle;
+    }
+
+    /* Delete Mode */
     .delete-mode { cursor: not-allowed; }
     #grid.delete-mode-active { cursor: not-allowed; }
     .delete-highlight {
@@ -106,11 +115,11 @@
       margin: 0; padding: 0;
     }
 
-    /* Placement Preview styling */
+    /* Placement Preview */
     .placement-preview {
       position: absolute;
       pointer-events: none;
-      opacity: 0.3; /* or 0.7, your choice */
+      opacity: 0.3;
       transition: transform 0.5s ease;
       z-index: 2;
       border: 2px solid #00ff00;
@@ -121,7 +130,7 @@
     .placement-preview.invalid {
       background-color: rgba(255, 0, 0, 0.1);
     }
-
+    
     #drag-ghost {
       position: absolute;
       pointer-events: none;
@@ -135,11 +144,11 @@
       position: absolute; top: 0; left: 0;
       width: 100%; height: 100%;
       pointer-events: none;
-      z-index: 10; /* Above the grid */
+      z-index: 10;
     }
     .name-label {
       position: absolute;
-      transform: translate(-50%, -50%); /* Center the label text */
+      transform: translate(-50%, -50%);
       pointer-events: none;
       font-size: 10px;
       display: none;
@@ -150,10 +159,43 @@
     #labels-overlay.show-names .name-label {
       display: block;
     }
+
+    /* Stats Display */
+    #stats-display {
+      margin: 5px 0;
+      padding: 5px;
+      background-color: #f8f8f8;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+    #stats-display div {
+      font-size: 14px;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
   <h1>Bear Trap Planner</h1>
+  <div id="stats-display">
+    <div>Banners: <span id="banner-count">0</span></div>
+    <div>Furnaces: <span id="furnace-count">0</span></div>
+    <div>No Coverage: <span id="uncovered-furnace-count">0</span></div>
+    <div>
+      1st Row: <span id="first-row-furnace-count">0</span>
+      <span class="color-block" style="background-color: #FFD700;"></span>
+    </div>
+    <div>
+      2nd Row: <span id="second-row-furnace-count">0</span>
+      <span class="color-block" style="background-color: #FFA500;"></span>
+    </div>
+    <div>
+      3rd Row: <span id="third-row-furnace-count">0</span>
+      <span class="color-block" style="background-color: #FF8C00;"></span>
+    </div>
+  </div>
   <div id="toolbar">
     <button id="add-bear-trap">Bear Trap</button>
     <button id="add-hq">HQ</button>
