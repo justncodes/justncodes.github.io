@@ -61,7 +61,12 @@ The planner displays several important metrics to optimize your layout:
 
 ## Changelog
 
-### v0.2 beta (Current)
+### v0.3 beta (Current)
+- Persistent layouts saved in local browser storage
+- Better backup file handling (saved as base64 .btpl)
+- Date and time stamp added to backup files
+
+### v0.2 beta
 - Complete code refactoring for improved maintainability
 - Performance optimizations for large layouts
 - Added chunked processing for smoother performance
@@ -78,7 +83,6 @@ The planner displays several important metrics to optimize your layout:
 
 ## Future Enhancements
 - [ ] Add visual indicator of Furnaces with no coverage
-- [ ] Better backup file handling
 - [ ] Layout sharing via URL
 - [ ] Improved visuals for buttons, labels etc.
 - [ ] Grid size adjustment

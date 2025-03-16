@@ -1,5 +1,5 @@
 /**
- * Bear Trap Planner v0.2 beta
+ * Bear Trap Planner v0.3 beta
  * A planning tool for Whiteout Survival bear trap layouts
  */
 
@@ -90,6 +90,13 @@
     
     // Create delete highlight
     createDeleteHighlight();
+
+    // Load saved layout (if any)
+    showLoading();
+    loadLayoutFromLocalStorage()
+      .finally(() => {
+        hideLoading();
+      });
   }
 
   function cacheDOMElements() {
@@ -183,24 +190,27 @@
       refreshGrid();
     });
     DOM.labelsOverlay.classList.add('show-names');
-
+  
     // Toggle isometric
     const isometricCheckbox = document.getElementById('toggle-isometric');
     isometricCheckbox.addEventListener('change', e => {
       const isIso = e.target.checked;
-
+  
       DOM.gridWrapper.classList.toggle('isometric', isIso);
       DOM.dragGhost.classList.toggle('isometric', isIso);
-
+  
       const bottomBar = document.getElementById('toolbar-bottom');
       bottomBar.classList.toggle('isometric', isIso);
-
+  
       if (DOM.placementPreview) {
         DOM.placementPreview.classList.toggle('isometric', isIso);
       }
       
       // Reposition labels smoothly
       animateLabelPositions(500);
+      
+      // Save the isometric state to localStorage
+      saveLayoutToLocalStorage();
     });
   }
 
@@ -240,6 +250,7 @@
       removeObject(obj);
       refreshGrid();
       updateStatsDisplay();
+      saveLayoutToLocalStorage();
     }
   }
 
@@ -285,6 +296,7 @@
 
     refreshGrid();
     updateStatsDisplay();
+    saveLayoutToLocalStorage();
   }
 
   function handleDragStart(e) {
@@ -382,6 +394,7 @@
 
     obj.name = newName.trim();
     refreshGrid();
+    saveLayoutToLocalStorage();
   }
 
   function handlePlacementPreview(e) {
@@ -659,6 +672,7 @@
     draggedObject.col = col;
     refreshGrid();
     updateStatsDisplay();
+    saveLayoutToLocalStorage();
     STATE.dragging.object = null;
   }
 
@@ -1172,16 +1186,51 @@
      Save & Load Functions
   ============================================== */
   function saveLayout() {
-    const layoutJSON = JSON.stringify(STATE.placedObjects);
-    const blob = new Blob([layoutJSON], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'layout.json';
-    link.click();
-    URL.revokeObjectURL(url);
+    try {
+      // Create a timestamp for the filename
+      const now = new Date();
+      const dateStr = now.toISOString()
+        .replace(/:/g, '-')  // Replace colons with hyphens (not allowed in filenames)
+        .replace(/\..+/, '')  // Remove milliseconds
+        .replace('T', '_');   // Replace T with underscore for readability
+      
+      // Create the filename with timestamp
+      const filename = `bear-trap-layout_${dateStr}.btpl`;
+      
+      // Prepare the layout data
+      const layoutData = JSON.stringify(STATE.placedObjects);
+      
+      // First UTF-8 encode the JSON string, then Base64 encode it
+      const encodedData = btoa(
+        Array.from(new TextEncoder().encode(layoutData))
+          .map(byte => String.fromCharCode(byte))
+          .join('')
+      );
+      
+      // Create a Blob with the encoded data
+      const blob = new Blob([encodedData], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      
+      // Create download link and trigger download
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link); // Firefox requires the link to be in the body
+      link.click();
+      
+      // Cleanup
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 100);
+      
+      console.log(`Layout saved as ${filename}`);
+    } catch (error) {
+      console.error('Error saving layout:', error);
+      alert('Failed to save layout. Please try again.');
+    }
   }
-
+  
   function loadLayout(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -1191,7 +1240,28 @@
     const reader = new FileReader();
     reader.onload = function(e) {
       try {
-        const data = JSON.parse(e.target.result);
+        let data;
+        
+        // Check if the file is encoded (has our custom extension)
+        if (file.name.endsWith('.btpl')) {
+          // Decode the Base64 data
+          const encodedData = e.target.result;
+          
+          // Decode using the same approach as encoding, but in reverse
+          // First Base64 decode, then UTF-8 decode
+          const binaryString = atob(encodedData);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          const jsonString = new TextDecoder().decode(bytes);
+          
+          data = JSON.parse(jsonString);
+        } else {
+          // Legacy support for old JSON files
+          data = JSON.parse(e.target.result);
+        }
+        
         STATE.placedObjects = data.map(o => ({
           ...o,
           id: o.id || crypto.randomUUID()
@@ -1210,13 +1280,18 @@
             refreshGrid();
             updateStatsDisplay();
             hideLoading();
+            
+            // Save to localStorage for persistence
+            saveLayoutToLocalStorage();
           });
       } catch (err) {
-        console.error('Error parsing JSON:', err);
-        alert('Failed to load layout. Invalid JSON?');
+        console.error('Error parsing file:', err);
+        alert('Failed to load layout. Invalid or corrupted file format.');
         hideLoading();
       }
     };
+    
+    // Read as text for both formats
     reader.readAsText(file);
   }
 
@@ -1247,7 +1322,7 @@
       'bear-trap': 0,
       'hq': 0
     };
-    
+
     // Count objects
     STATE.placedObjects.forEach(o => {
       if (o.className === 'hq') {
@@ -1266,6 +1341,97 @@
     DOM.loadingOverlay.style.display = 'none';
   }
 
+  function saveLayoutToLocalStorage() {
+    try {
+      // Save the current layout to localStorage
+      localStorage.setItem('bearTrapPlanner_layout', JSON.stringify(STATE.placedObjects));
+      
+      // Save isometric view state
+      const isIsometric = document.getElementById('toggle-isometric').checked;
+      localStorage.setItem('bearTrapPlanner_isometric', isIsometric);
+      
+      localStorage.setItem('bearTrapPlanner_lastSaved', new Date().toISOString());
+      console.log('Layout and view state saved to localStorage');
+    } catch (error) {
+      console.error('Failed to save to localStorage:', error);
+      // If localStorage fails (private browsing, full storage, etc.)
+      // We silently fail without bothering the user
+    }
+  }
+
+  function loadLayoutFromLocalStorage() {
+    try {
+      // Try to load a saved layout from localStorage
+      const savedLayout = localStorage.getItem('bearTrapPlanner_layout');
+      if (!savedLayout) {
+        console.log('No saved layout found in localStorage');
+        return false;
+      }
+      
+      const lastSaved = localStorage.getItem('bearTrapPlanner_lastSaved');
+      console.log(`Loading saved layout from ${lastSaved || 'unknown time'}`);
+      
+      // Parse the saved layout
+      STATE.placedObjects = JSON.parse(savedLayout).map(o => ({
+        ...o,
+        id: o.id || crypto.randomUUID()
+      }));
+      
+      // Update object counters
+      recalculateObjectCounts();
+      
+      // Clear grid first
+      clearGridVisualOnly();
+      
+      // Restore isometric view state if saved
+      const isIsometric = localStorage.getItem('bearTrapPlanner_isometric');
+      const isIso = isIsometric === 'true';
+      if (isIsometric !== null) {
+        const isometricCheckbox = document.getElementById('toggle-isometric');
+        isometricCheckbox.checked = isIso;
+        
+        // Apply isometric view based on saved state
+        DOM.gridWrapper.classList.toggle('isometric', isIso);
+        const bottomBar = document.getElementById('toolbar-bottom');
+        bottomBar.classList.toggle('isometric', isIso);
+      }
+      
+      // Process placement in chunks
+      return processObjectsInChunks()
+        .then(() => {
+          refreshGrid();
+          updateStatsDisplay();
+          
+          // If isometric, apply a delayed refresh of label positions to ensure
+          // the transform has been fully applied
+          if (isIso) {
+            // First immediate refresh attempt
+            refreshLabelPositions();
+            
+            // Then several delayed attempts to catch when transform is complete
+            setTimeout(() => refreshLabelPositions(), 50);
+            setTimeout(() => refreshLabelPositions(), 200);
+            setTimeout(() => refreshLabelPositions(), 500);
+          }
+          
+          return true;
+        });
+    } catch (error) {
+      console.error('Failed to load layout from localStorage:', error);
+      return Promise.resolve(false);
+    }
+  }
+
+  function clearSavedLayout() {
+    try {
+      localStorage.removeItem('bearTrapPlanner_layout');
+      localStorage.removeItem('bearTrapPlanner_isometric');
+      localStorage.removeItem('bearTrapPlanner_lastSaved');
+      console.log('Cleared saved data from localStorage');
+    } catch (error) {
+      console.error('Failed to clear saved layout:', error);
+    }
+  }
   /* ===========================================
      Grid Utility Functions
   ============================================== */
@@ -1340,15 +1506,18 @@
       'bear-trap': 0,
       'hq': 0
     };
-
+  
     // Clear labels
     DOM.labelsOverlay.innerHTML = '';
-
+  
     // Reset current object
     STATE.mode.currentObject = null;
     
     // Update stats
     updateStatsDisplay();
+    
+    // Clear saved layout from localStorage
+    clearSavedLayout();
   }
 
   /* ===========================================
