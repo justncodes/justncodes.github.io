@@ -206,6 +206,11 @@
         DOM.placementPreview.classList.toggle('isometric', isIso);
       }
       
+      // Update delete highlight if it exists - this is the key addition
+      if (DOM.deleteHighlight) {
+        DOM.deleteHighlight.classList.toggle('isometric', isIso);
+      }
+      
       // Reposition labels smoothly
       animateLabelPositions(500);
       
@@ -321,7 +326,7 @@
   function handleMouseMove(e) {
     if (!STATE.dragging.active || !STATE.dragging.object) return;
     if (STATE.isUpdating) return;
-
+  
     STATE.isUpdating = true;
     requestAnimationFrame(() => {
       try {
@@ -360,14 +365,22 @@
       return;
     }
     
+    // Find the object at the current mouse position
     const obj = findObjectAt(tile.row, tile.col);
+    
+    // Compare with the last highlighted object
     if (obj && obj !== STATE.lastHoveredObject) {
+      // We have a new object to highlight
       updateDeleteHighlight(obj);
       STATE.lastHoveredObject = obj;
-    } else if (!obj) {
+    } else if (!obj && STATE.lastHoveredObject) {
+      // Mouse moved away from any object
       clearDeleteHighlight();
       STATE.lastHoveredObject = null;
     }
+    
+    // Store the last known mouse position for debugging if needed
+    STATE.lastMousePos = { row: tile.row, col: tile.col };
   }
 
   function handleNameSetting(e) {
@@ -375,14 +388,12 @@
     const row = Math.floor(tileIndex / CONFIG.gridSize);
     const col = tileIndex % CONFIG.gridSize;
 
-    // Find object
     const obj = findObjectAt(row, col);
     if (!obj) {
       alert('No object here to name.');
       return;
     }
 
-    // Restrict naming to certain classes
     const allowed = ['furnace', 'hq', 'bear-trap'];
     if (!allowed.includes(obj.className)) {
       alert('Naming only for HQ, Bear Traps, and Furnaces.');
@@ -390,7 +401,7 @@
     }
 
     const newName = prompt(`Enter a name for this ${obj.className}:`, obj.name || '');
-    if (newName === null) return; // canceled
+    if (newName === null) return;
 
     obj.name = newName.trim();
     refreshGrid();
@@ -528,28 +539,28 @@
     const { tileSize } = CONFIG;
     const size = draggedObject.size;
     const half = (size - 1) / 2;
-
+  
     // Calculate new grid coordinates
     let row = Math.floor(tileUnderMouse.row - half);
     let col = Math.floor(tileUnderMouse.col - half);
-
+  
     // Clamp to grid boundaries
     const { gridSize } = CONFIG;
     row = Math.max(0, Math.min(row, gridSize - size));
     col = Math.max(0, Math.min(col, gridSize - size));
-
+  
     // Update drag ghost position in grid coordinates
     const left = col * tileSize;
     const top = row * tileSize;
-
+  
     DOM.dragGhost.style.left = `${left}px`;
     DOM.dragGhost.style.top = `${top}px`;
     DOM.dragGhost.style.width = `${size * tileSize}px`;
     DOM.dragGhost.style.height = `${size * tileSize}px`;
-
+  
     // Clear previous highlights
     clearRealTimeCoverage();
-
+  
     // Update visual cues if within bounds
     if (row >= 0 && col >= 0 && row + size <= gridSize && col + size <= gridSize) {
       // Highlight territory if needed
@@ -558,11 +569,11 @@
       } else if (draggedObject.className === 'banner') {
         highlightTerritory(row, col, CONFIG.coverageRadius.banner);
       }
-
+  
       // Highlight object borders
       highlightObjectBorderCenterBased(row, col, size);
     }
-
+  
     // Update label position if needed
     updateLabelForDraggedObject(draggedObject, row, col, size);
   }
@@ -961,7 +972,7 @@
     DOM.deleteHighlight.style.cssText = 'width: 0; height: 0; border: none;';
     DOM.grid.appendChild(DOM.deleteHighlight);
   }
-
+  
   function updateDeleteHighlight(obj) {
     if (!DOM.deleteHighlight) createDeleteHighlight();
     
@@ -975,6 +986,10 @@
       top: ${obj.row * tileSize}px;
       border: 2px solid red;
     `;
+    
+    // Add isometric class if needed - this is the key fix
+    const isIso = document.getElementById('toggle-isometric').checked;
+    DOM.deleteHighlight.classList.toggle('isometric', isIso);
   }
 
   function clearDeleteHighlight() {
@@ -982,7 +997,7 @@
       DOM.deleteHighlight.style.cssText = 'width: 0; height: 0; border: none;';
     }
   }
-
+  
   /* ===========================================
      Placement Preview
   ============================================== */
@@ -991,27 +1006,27 @@
     const { currentObject } = STATE.mode;
     const size = currentObject.size;
     const half = (size - 1) / 2;
-
+  
     // Calculate grid position
     let row = Math.floor(tile.row - half);
     let col = Math.floor(tile.col - half);
-
+  
     // Clamp to boundaries
     const { gridSize } = CONFIG;
     row = Math.max(0, Math.min(row, gridSize - size));
     col = Math.max(0, Math.min(col, gridSize - size));
-
+  
     // Create preview if needed
     if (!DOM.placementPreview) {
       DOM.placementPreview = document.createElement('div');
       DOM.placementPreview.className = 'placement-preview';
       DOM.grid.appendChild(DOM.placementPreview);
     }
-
+  
     // Check if placement is valid
     const isValidPlacement = canPlaceObject(row, col, size);
     DOM.placementPreview.classList.toggle('invalid', !isValidPlacement);
-
+  
     // Position the preview
     const sizePx = size * tileSize;
     DOM.placementPreview.style.display = 'block';
@@ -1019,7 +1034,7 @@
     DOM.placementPreview.style.height = `${sizePx}px`;
     DOM.placementPreview.style.left = `${col * tileSize}px`;
     DOM.placementPreview.style.top = `${row * tileSize}px`;
-
+  
     // Apply isometric transform if needed
     const isIso = document.getElementById('toggle-isometric').checked;
     DOM.placementPreview.classList.toggle('isometric', isIso);
@@ -1436,58 +1451,83 @@
      Grid Utility Functions
   ============================================== */
   function getTileFromMouseEvent(e) {
-    const wrapperRect = DOM.gridWrapper.getBoundingClientRect();
     const gridRect = DOM.grid.getBoundingClientRect();
-
-    const gridWidth = DOM.grid.offsetWidth;
-    const gridHeight = DOM.grid.offsetHeight;
-    const gridOffsetX = (wrapperRect.width - gridWidth) / 2;
-    const gridOffsetY = (wrapperRect.height - gridHeight) / 2;
-
-    let mouseX = e.clientX - wrapperRect.left;
-    let mouseY = e.clientY - wrapperRect.top;
-
-    // Handle isometric view
-    if (DOM.gridWrapper.classList.contains('isometric')) {
-      const style = window.getComputedStyle(DOM.gridWrapper);
-      const transform = style.transform;
-      if (transform && transform !== 'none') {
-        try {
-          const matrix = new DOMMatrix(transform);
-          const invertedMatrix = matrix.inverse();
-          const centerX = wrapperRect.width / 2;
-          const centerY = wrapperRect.height / 2;
-
-          // Translate so (0,0) is center of wrapper
-          mouseX -= centerX;
-          mouseY -= centerY;
-
-          const point = new DOMPoint(mouseX, mouseY);
-          const transformed = point.matrixTransform(invertedMatrix);
-
-          // Re-add
-          mouseX = transformed.x + centerX;
-          mouseY = transformed.y + centerY;
-        } catch (err) {
-          console.error('Matrix inversion failed:', err);
-        }
-      }
-    }
-
-    // Adjust for grid offset inside wrapper
-    mouseX -= gridOffsetX;
-    mouseY -= gridOffsetY;
-
-    // Convert to tile indices
     const { tileSize, gridSize } = CONFIG;
-    const col = Math.floor(mouseX / tileSize);
-    const row = Math.floor(mouseY / tileSize);
-
-    if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) {
-      return null;
-    }
     
-    return { row, col };
+    // Get position relative to the grid element
+    const relX = e.clientX - gridRect.left;
+    const relY = e.clientY - gridRect.top;
+    
+    // Check if we're in isometric view
+    const isIso = DOM.gridWrapper.classList.contains('isometric');
+    
+    if (!isIso) {
+      // Standard view is straightforward
+      const col = Math.floor(relX / tileSize);
+      const row = Math.floor(relY / tileSize);
+      
+      if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) {
+        return null;
+      }
+      
+      return { row, col };
+    } else {
+      // Isometric view requires inverse transformation
+      
+      // The grid's dimensions
+      const gridWidth = gridRect.width;
+      const gridHeight = gridRect.height;
+      
+      // First translate so the origin is at the center
+      const centerX = gridWidth / 2;
+      const centerY = gridHeight / 2;
+      
+      // Coordinates relative to center
+      const relToCenter_x = relX - centerX;
+      const relToCenter_y = relY - centerY;
+      
+      // The CSS uses rotate(45deg) skew(-15deg, -15deg)
+      // Let's invert this transformation
+      
+      // Convert angles to radians
+      const rotateAngle = 45 * Math.PI / 180;
+      const skewAngle = -15 * Math.PI / 180;
+      
+      // Un-rotate first (counter-clockwise by 45 degrees)
+      const cos45 = Math.cos(rotateAngle);
+      const sin45 = Math.sin(rotateAngle);
+      
+      // We need to invert the rotation matrix
+      // For a rotation matrix, the inverse is its transpose
+      const unrotatedX = relToCenter_x * cos45 + relToCenter_y * sin45;
+      const unrotatedY = -relToCenter_x * sin45 + relToCenter_y * cos45;
+      
+      // Now un-skew - this is more complex
+      // The skew transform in 2D is:
+      // x' = x + y * tan(skewX)
+      // y' = x * tan(skewY) + y
+      // We need to invert this
+      
+      const tanSkew = Math.tan(skewAngle);
+      
+      // Invert the skew
+      const unskewedX = unrotatedX - unrotatedY * tanSkew;
+      const unskewedY = unrotatedY - unrotatedX * tanSkew; 
+      
+      // Now translate back to grid coordinates
+      const transformedX = unskewedX + centerX;
+      const transformedY = unskewedY + centerY;
+      
+      // Convert to tile indices
+      const col = Math.floor(transformedX / tileSize);
+      const row = Math.floor(transformedY / tileSize);
+      
+      if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) {
+        return null;
+      }
+      
+      return { row, col };
+    }
   }
 
   function clearGrid() {

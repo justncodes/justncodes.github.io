@@ -105,14 +105,13 @@
     /* Delete Mode */
     .delete-mode { cursor: not-allowed; }
     #grid.delete-mode-active { cursor: not-allowed; }
-    .delete-highlight {
-      position: absolute;
-      pointer-events: none;
-      border: 2px solid red;
-      box-sizing: border-box;
-      z-index: 1;
-      background: transparent;
-      margin: 0; padding: 0;
+    .delete-target {
+      box-shadow: inset 0 0 0 2px red !important;
+      z-index: 5;
+    }
+
+    .delete-highlight.isometric {
+      transform-origin: center center;
     }
 
     /* Placement Preview */
