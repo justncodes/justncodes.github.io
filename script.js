@@ -1,5 +1,5 @@
 /**
- * Bear Trap Planner v0.3 beta
+ * Bear Trap Planner v0.4 beta
  * A planning tool for Whiteout Survival bear trap layouts
  */
 
@@ -85,18 +85,29 @@
     // Initialize coverage map
     initCoverageMap();
     
+    // Initialize URL sharing functionality
+    initURLSharing();
+    
     // Set up event listeners
     setupEventListeners();
     
     // Create delete highlight
     createDeleteHighlight();
 
-    // Load saved layout (if any)
-    showLoading();
-    loadLayoutFromLocalStorage()
-      .finally(() => {
+    // Load layout from URL hash or localStorage
+    const hasURLLayout = checkForLayoutInURL();
+    const hasLocalStorageLayout = !!localStorage.getItem('bearTrapPlanner_layout');
+    
+    if (hasURLLayout || hasLocalStorageLayout) {
+      showLoading();
+    
+      if (hasURLLayout) {
+        // URL layout is already loaded inside checkForLayoutInURL()
         hideLoading();
-      });
+      } else {
+        loadLayoutFromLocalStorage().finally(() => hideLoading());
+      }
+    }
   }
 
   function cacheDOMElements() {
@@ -1558,6 +1569,241 @@
     
     // Clear saved layout from localStorage
     clearSavedLayout();
+  }
+
+  /* ===========================================
+     URL Sharing Functions
+  ============================================== */
+  function shareLayoutAsURL() {
+    try {
+      // Prepare the layout data
+      const layoutData = JSON.stringify(STATE.placedObjects);
+      
+      // Compress and encode the data to make the URL shorter
+      const compressedData = compressLayoutData(layoutData);
+      
+      // Create the URL with the layout data in the hash fragment
+      const shareURL = `${window.location.origin}${window.location.pathname}#layout=${compressedData}`;
+      
+      // Show a dialog with the URL for the user to copy
+      showShareDialog(shareURL);
+      
+      console.log('Layout shared as URL');
+    } catch (error) {
+      console.error('Error sharing layout as URL:', error);
+      alert('Failed to generate share URL. Please try again.');
+    }
+  }
+  
+  function compressLayoutData(layoutData) {
+    // First UTF-8 encode the JSON string, then Base64 encode it
+    return btoa(
+      Array.from(new TextEncoder().encode(layoutData))
+        .map(byte => String.fromCharCode(byte))
+        .join('')
+    );
+  }
+  
+  function decompressLayoutData(compressedData) {
+    try {
+      // Decode from Base64
+      const binaryString = atob(compressedData);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return new TextDecoder().decode(bytes);
+    } catch (error) {
+      console.error('Error decompressing data:', error);
+      throw new Error('Invalid layout data format');
+    }
+  }
+  
+  function showShareDialog(shareURL) {
+    // Create modal background
+    const modalBackground = document.createElement('div');
+    modalBackground.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    `;
+    
+    // Create modal content
+    const modalContent = document.createElement('div');
+    modalContent.style.cssText = `
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+      max-width: 90%;
+      width: 600px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    `;
+    
+    // Create title
+    const title = document.createElement('h3');
+    title.textContent = 'Share Layout';
+    title.style.margin = '0 0 16px 0';
+    
+    // Create URL input field
+    const urlInput = document.createElement('input');
+    urlInput.value = shareURL;
+    urlInput.readOnly = true;
+    urlInput.style.cssText = `
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 16px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    `;
+    
+    // Create instructions text
+    const instructions = document.createElement('p');
+    instructions.textContent = 'Copy this URL and share it with others. When someone opens the URL, your layout will load automatically.';
+    instructions.style.cssText = `
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 16px;
+      text-align: center;
+    `;
+    
+    // Create button container
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.gap = '10px';
+    
+    // Create copy button
+    const copyButton = document.createElement('button');
+    copyButton.textContent = 'Copy URL';
+    copyButton.style.padding = '10px 16px';
+    copyButton.addEventListener('click', () => {
+      urlInput.select();
+      document.execCommand('copy');
+      copyButton.textContent = 'Copied!';
+      setTimeout(() => {
+        copyButton.textContent = 'Copy URL';
+      }, 2000);
+    });
+    
+    // Create test button
+    const testButton = document.createElement('button');
+    testButton.textContent = 'Test URL';
+    testButton.style.padding = '10px 16px';
+    testButton.addEventListener('click', () => {
+      // Open the URL in a new tab
+      window.open(shareURL, '_blank');
+    });
+    
+    // Create close button
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'Close';
+    closeButton.style.padding = '10px 16px';
+    closeButton.addEventListener('click', () => {
+      document.body.removeChild(modalBackground);
+    });
+    
+    // Assemble the modal
+    buttonContainer.appendChild(copyButton);
+    buttonContainer.appendChild(testButton);
+    buttonContainer.appendChild(closeButton);
+    modalContent.appendChild(title);
+    modalContent.appendChild(instructions);
+    modalContent.appendChild(urlInput);
+    modalContent.appendChild(buttonContainer);
+    modalBackground.appendChild(modalContent);
+    
+    // Add to document
+    document.body.appendChild(modalBackground);
+    
+    // Select the URL for easy copying
+    urlInput.select();
+  }
+  
+  function checkForLayoutInURL() {
+    // Check if there's a layout in the hash fragment
+    if (window.location.hash && window.location.hash.includes('layout=')) {
+      showLoading();
+      
+      try {
+        // Extract the layout data from the hash
+        const hashParts = window.location.hash.substring(1).split('=');
+        if (hashParts.length !== 2 || hashParts[0] !== 'layout') {
+          throw new Error('Invalid URL format');
+        }
+        
+        const compressedData = hashParts[1];
+        const layoutJSON = decompressLayoutData(compressedData);
+        const layoutData = JSON.parse(layoutJSON);
+        
+        // Load the layout
+        STATE.placedObjects = layoutData.map(o => ({
+          ...o,
+          id: o.id || crypto.randomUUID()
+        }));
+        
+        // Update object counters
+        recalculateObjectCounts();
+        
+        // Clear grid first
+        clearGridVisualOnly();
+        
+        // Process placement in chunks
+        processObjectsInChunks()
+          .then(() => {
+            refreshGrid();
+            updateStatsDisplay();
+            hideLoading();
+            
+            // Save to localStorage for persistence
+            saveLayoutToLocalStorage();
+            
+            // Clear the hash to avoid reloading the same layout on refresh
+            // Use replaceState to avoid adding to browser history
+            window.history.replaceState(null, null, window.location.pathname);
+          });
+        
+        return true;
+      } catch (error) {
+        console.error('Error loading layout from URL:', error);
+        alert('Failed to load shared layout. The link may be invalid or corrupted.');
+        hideLoading();
+        return false;
+      }
+    }
+    
+    return false;
+  }
+  
+  // Listen for hash changes to handle URL sharing
+  function setupHashChangeListener() {
+    window.addEventListener('hashchange', function() {
+      if (window.location.hash && window.location.hash.includes('layout=')) {
+        checkForLayoutInURL();
+      }
+    });
+  }
+  
+  // Set up the share URL button listener
+  function setupShareURLButton() {
+    const shareButton = document.getElementById('share-url');
+    if (shareButton) {
+      shareButton.addEventListener('click', shareLayoutAsURL);
+    }
+  }
+  
+  // Initialize URL sharing functionality
+  function initURLSharing() {
+    setupShareURLButton();
+    setupHashChangeListener();
   }
 
   /* ===========================================
